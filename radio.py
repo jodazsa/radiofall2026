@@ -40,12 +40,32 @@ STATE_PATH = Path("/home/pi/state.json")
 STATE_BACKUP_PATH = Path("/home/pi/state.backup.json")
 
 # ── Hardware pin mappings ──────────────────────────────────
-# Station BCD switch
-STATION_PINS = {"bit0": 9, "bit1": 10, "bit2": 22, "bit3": 17}
-# Volume BCD switch (was bank switch)
-VOLUME_PINS = {"bit0": 13, "bit1": 6, "bit2": 5, "bit3": 11}
-# Stop/start toggle switch
-STOP_START_PIN = 24
+# BCM GPIO assignments
+
+VOLUME_PINS = {
+    "bit0": 4,
+    "bit1": 14,
+    "bit2": 15,
+    "bit3": 17,
+}
+
+BANK_PINS = {
+    "bit0": 27,
+    "bit1": 22,
+    "bit2": 23,
+    "bit3": 24,
+}
+
+STATION_PINS = {
+    "bit0": 5,
+    "bit1": 6,
+    "bit2": 12,
+    "bit3": 13,
+}
+
+PLAY_PAUSE_PIN = 10
+SHUTDOWN_PIN = 9
+
 # OLED display I2C address (Adafruit 4440, SSD1306 128x32)
 OLED_I2C_ADDR = 0x3C
 OLED_WIDTH = 128

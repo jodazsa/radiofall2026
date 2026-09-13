@@ -5,11 +5,18 @@ import RPi.GPIO as GPIO
 
 # BCM GPIO assignments
 
+VOLUME_PINS = {
+    "bit0": 4,
+    "bit1": 14,
+    "bit2": 15,
+    "bit3": 17,
+}
+
 BANK_PINS = {
-    "bit0": 17,
-    "bit1": 27,
-    "bit2": 22,
-    "bit3": 23,
+    "bit0": 27,
+    "bit1": 22,
+    "bit2": 23,
+    "bit3": 24,
 }
 
 STATION_PINS = {
@@ -19,15 +26,8 @@ STATION_PINS = {
     "bit3": 13,
 }
 
-VOLUME_PINS = {
-    "bit0": 10,
-    "bit1": 9,
-    "bit2": 11,
-    "bit3": 8,
-}
-
-PLAY_PAUSE_PIN = 24
-SHUTDOWN_PIN = 25
+PLAY_PAUSE_PIN = 10
+SHUTDOWN_PIN = 9
 
 
 def read_bcd(pins):

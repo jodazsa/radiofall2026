@@ -1,35 +1,56 @@
 #!/usr/bin/env python3
+"""Standalone GPIO test for the Fall 2026 radio control panel.
+
+This test does not use MPD, the OLED, or systemd. It verifies:
+- three 10-position BCD rotary switches
+- 40 ms whole-value debounce
+- relative volume direction, including 9<->0 wraparound
+- two maintained SPST switches
+"""
 
 import time
 import RPi.GPIO as GPIO
 
-# BCM GPIO assignments
+# ── Hardware pin mappings (BCM numbering) ──────────────────
+# The bit order below was verified on the actual switches so physical
+# positions decode as 0,1,2,3,4,5,6,7,8,9.
 
+# Volume BCD: physical 7(V1), 8(V2), 10(V4), 11(V8)
 VOLUME_PINS = {
-    "bit0": 17,   # physical pin 11
-    "bit1": 15,   # physical pin 10
-    "bit2": 14,   # physical pin 8
-    "bit3": 4,    # physical pin 7
+    "bit0": 17,  # physical 11
+    "bit1": 15,  # physical 10 (RXD)
+    "bit2": 14,  # physical 8  (TXD)
+    "bit3": 4,   # physical 7
 }
 
+# Bank BCD: physical 13(B1), 15(B2), 16(B4), 18(B8)
 BANK_PINS = {
-    "bit0": 24,   # physical pin 18
-    "bit1": 23,   # physical pin 16
-    "bit2": 22,   # physical pin 15
-    "bit3": 27,   # physical pin 13
+    "bit0": 24,  # physical 18
+    "bit1": 23,  # physical 16
+    "bit2": 22,  # physical 15
+    "bit3": 27,  # physical 13
 }
 
+# Station BCD: physical 29(S1), 31(S2), 32(S4), 33(S8)
 STATION_PINS = {
-    "bit0": 13,   # physical pin 33
-    "bit1": 12,   # physical pin 32
-    "bit2": 6,    # physical pin 31
-    "bit3": 5,    # physical pin 29
+    "bit0": 13,  # physical 33
+    "bit1": 12,  # physical 32
+    "bit2": 6,   # physical 31
+    "bit3": 5,   # physical 29
 }
 
-PLAY_PAUSE_PIN = 10
-SHUTDOWN_PIN = 9
+PLAY_PAUSE_PIN = 10  # SW1, physical 19 (MOSI)
+SHUTDOWN_PIN = 9     # SW2, physical 21 (MISO)
+
+# Physical 22(GPIO25), 23(GPIO11/SCLK), 24(GPIO8/CE0), and 26(GPIO7/CE1)
+# are terminated in the harness and intentionally not claimed here.
+
+DEBOUNCE_TIME = 0.040
+POLL_INTERVAL = 0.01
+
 
 def read_bcd(pins):
+    """Read an active-low 4-bit BCD selector and return 0..9 or None."""
     raw = 0
 
     if GPIO.input(pins["bit0"]):
@@ -41,14 +62,56 @@ def read_bcd(pins):
     if GPIO.input(pins["bit3"]):
         raw |= 8
 
-    # Inputs use pull-ups and switches close to ground,
-    # so invert all four bits exactly once.
+    # Pull-ups make open contacts HIGH and closed-to-ground contacts LOW.
     value = raw ^ 0xF
 
     if 0 <= value <= 9:
         return value
 
     return None
+
+
+class DebouncedValue:
+    """Accept a complete control value only after it is stable for 40 ms."""
+
+    def __init__(self, initial_value, settle_time=DEBOUNCE_TIME):
+        self.stable = initial_value
+        self.candidate = initial_value
+        self.candidate_since = time.monotonic()
+        self.settle_time = settle_time
+
+    def update(self, value, now):
+        """Return (old, new) when a new stable value is accepted, else None."""
+        if value is None:
+            # Invalid BCD words are ignored and reset the candidate timer.
+            self.candidate = self.stable
+            self.candidate_since = now
+            return None
+
+        if value != self.candidate:
+            self.candidate = value
+            self.candidate_since = now
+            return None
+
+        if value != self.stable and now - self.candidate_since >= self.settle_time:
+            old_value = self.stable
+            self.stable = value
+            return old_value, value
+
+        return None
+
+
+def volume_direction(old_pos, new_pos):
+    """Return +1 for one CW step, -1 for one CCW step, 0 for a jump."""
+    if old_pos == 9 and new_pos == 0:
+        return 1
+    if old_pos == 0 and new_pos == 9:
+        return -1
+    if new_pos == old_pos + 1:
+        return 1
+    if new_pos == old_pos - 1:
+        return -1
+    return 0
 
 
 def setup_gpio():
@@ -67,31 +130,81 @@ def setup_gpio():
     GPIO.setup(SHUTDOWN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 
+def wait_for_valid_bcd(label, pins):
+    """Wait until a rotary presents a valid BCD word before starting the test."""
+    while True:
+        value = read_bcd(pins)
+        if value is not None:
+            return value
+        print(f"Waiting for valid {label} position...")
+        time.sleep(0.25)
+
+
 def main():
     setup_gpio()
 
-    print("Control test running.")
-    print("Press Ctrl+C to stop.")
-    print()
-
     try:
+        bank = wait_for_valid_bcd("bank", BANK_PINS)
+        station = wait_for_valid_bcd("station", STATION_PINS)
+        volume = wait_for_valid_bcd("volume", VOLUME_PINS)
+        play = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+        shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
+
+        bank_debounce = DebouncedValue(bank)
+        station_debounce = DebouncedValue(station)
+        volume_debounce = DebouncedValue(volume)
+        play_debounce = DebouncedValue(play)
+        shutdown_debounce = DebouncedValue(shutdown)
+
+        print("Control test running. Press Ctrl+C to stop.")
+        print(
+            "INITIAL "
+            f"bank={bank} station={station} volume={volume} "
+            f"play_pause={'CLOSED' if play else 'OPEN'} "
+            f"shutdown={'CLOSED' if shutdown else 'OPEN'}"
+        )
+
         while True:
-            bank = read_bcd(BANK_PINS)
-            station = read_bcd(STATION_PINS)
-            volume = read_bcd(VOLUME_PINS)
+            now = time.monotonic()
 
-            play_pause_closed = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
-            shutdown_closed = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
+            change = bank_debounce.update(read_bcd(BANK_PINS), now)
+            if change is not None:
+                old, new = change
+                print(f"BANK     {old} -> {new}")
 
-            print(
-                f"bank={bank}  "
-                f"station={station}  "
-                f"volume={volume}  "
-                f"play_pause={'CLOSED' if play_pause_closed else 'OPEN'}  "
-                f"shutdown={'CLOSED' if shutdown_closed else 'OPEN'}"
-            )
+            change = station_debounce.update(read_bcd(STATION_PINS), now)
+            if change is not None:
+                old, new = change
+                print(f"STATION  {old} -> {new}")
 
-            time.sleep(0.1)
+            change = volume_debounce.update(read_bcd(VOLUME_PINS), now)
+            if change is not None:
+                old, new = change
+                direction = volume_direction(old, new)
+                if direction > 0:
+                    action = "UP"
+                elif direction < 0:
+                    action = "DOWN"
+                else:
+                    action = "JUMP - REFERENCE ONLY"
+                print(f"VOLUME   {old} -> {new}  {action}")
+
+            raw_play = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+            change = play_debounce.update(raw_play, now)
+            if change is not None:
+                _old, new = change
+                print(f"PLAY     {'CLOSED / PLAY' if new else 'OPEN / PAUSE'}")
+
+            raw_shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
+            change = shutdown_debounce.update(raw_shutdown, now)
+            if change is not None:
+                _old, new = change
+                print(
+                    "SHUTDOWN "
+                    + ("CLOSED / PREPARE FOR POWER LOSS" if new else "OPEN / RUN")
+                )
+
+            time.sleep(POLL_INTERVAL)
 
     except KeyboardInterrupt:
         print("\nStopping test.")

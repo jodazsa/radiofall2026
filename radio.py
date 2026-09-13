@@ -2,9 +2,11 @@
 """Raspberry Pi radio controller with OLED display.
 
 Single script that handles:
-- BCD rotary switch for volume control (10 positions)
-- BCD rotary switch for station selection (wraps through flat list)
-- Stop/start toggle switch
+- BCD rotary switch for bank selection (10 positions)
+- BCD rotary switch for station selection (10 positions)
+- BCD rotary switch used as a relative volume control (10 positions)
+- Maintained play/pause switch
+- Maintained prepare-for-power-loss switch (logged only for now)
 - 128x32 I2C OLED display (station name + volume)
 - MPD playback via mpc commands
 - Stream watchdog (auto-restarts dead streams)
@@ -40,31 +42,42 @@ STATE_PATH = Path("/home/pi/state.json")
 STATE_BACKUP_PATH = Path("/home/pi/state.backup.json")
 
 # ── Hardware pin mappings ──────────────────────────────────
-# BCM GPIO assignments
+# IMPORTANT: these are BCM GPIO numbers. Comments show physical header pins.
+# The FR01 switch terminals were verified on hardware to appear in reverse
+# significance relative to the physical V1/V2/V4/V8, B1/B2/B4/B8, and
+# S1/S2/S4/S8 labels, so the software bit mapping below is intentionally
+# reversed to make physical selector positions decode as 0..9.
 
+# Volume BCD: physical 7(V1), 8(V2), 10(V4), 11(V8)
 VOLUME_PINS = {
-    "bit0": 17,   # physical pin 11
-    "bit1": 15,   # physical pin 10
-    "bit2": 14,   # physical pin 8
-    "bit3": 4,    # physical pin 7
+    "bit0": 17,  # physical 11
+    "bit1": 15,  # physical 10 (RXD)
+    "bit2": 14,  # physical 8  (TXD)
+    "bit3": 4,   # physical 7
 }
 
+# Bank BCD: physical 13(B1), 15(B2), 16(B4), 18(B8)
 BANK_PINS = {
-    "bit0": 24,   # physical pin 18
-    "bit1": 23,   # physical pin 16
-    "bit2": 22,   # physical pin 15
-    "bit3": 27,   # physical pin 13
+    "bit0": 24,  # physical 18
+    "bit1": 23,  # physical 16
+    "bit2": 22,  # physical 15
+    "bit3": 27,  # physical 13
 }
 
+# Station BCD: physical 29(S1), 31(S2), 32(S4), 33(S8)
 STATION_PINS = {
-    "bit0": 13,   # physical pin 33
-    "bit1": 12,   # physical pin 32
-    "bit2": 6,    # physical pin 31
-    "bit3": 5,    # physical pin 29
+    "bit0": 13,  # physical 33
+    "bit1": 12,  # physical 32
+    "bit2": 6,   # physical 31
+    "bit3": 5,   # physical 29
 }
 
-PLAY_PAUSE_PIN = 10
-SHUTDOWN_PIN = 9
+# Maintained SPST switches
+PLAY_PAUSE_PIN = 10  # SW1, physical 19 (MOSI)
+SHUTDOWN_PIN = 9     # SW2, physical 21 (MISO)
+
+# Physical 22(GPIO25), 23(GPIO11/SCLK), 24(GPIO8/CE0), and 26(GPIO7/CE1)
+# are terminated in the harness and intentionally not claimed here.
 
 # OLED display I2C address (Adafruit 4440, SSD1306 128x32)
 OLED_I2C_ADDR = 0x3C
@@ -78,8 +91,8 @@ DEFAULT_VOLUME = 25
 VOLUME_STEP = 4  # Each knob position change increments/decrements by this amount
 
 # ── Tuning ─────────────────────────────────────────────────
-POLL_INTERVAL = 0.1       # Main loop sleep (seconds)
-DEBOUNCE_TIME = 0.15      # Ignore switch changes faster than this
+POLL_INTERVAL = 0.01      # Main loop sleep (seconds); supports 40 ms debounce
+DEBOUNCE_TIME = 0.040     # Complete control state must remain stable for 40 ms
 WATCHDOG_INTERVAL = 10.0  # Seconds between stream health checks
 WATCHDOG_GRACE = 15.0     # Wait this long before restarting a dead stream
 STATE_SAVE_INTERVAL = 5.0 # Seconds between state file writes
@@ -249,14 +262,26 @@ def mpc(*args):
         return ""
 
 
-def read_bcd(pins: dict) -> int:
-    """Read 4-bit BCD value from GPIO pins (active LOW)."""
-    val = 0
-    if GPIO.input(pins["bit0"]) == GPIO.LOW: val += 1
-    if GPIO.input(pins["bit1"]) == GPIO.LOW: val += 2
-    if GPIO.input(pins["bit2"]) == GPIO.LOW: val += 4
-    if GPIO.input(pins["bit3"]) == GPIO.LOW: val += 8
-    return val
+def read_bcd(pins):
+    """Read an active-low 4-bit BCD selector and return 0..9 or None."""
+    raw = 0
+
+    if GPIO.input(pins["bit0"]):
+        raw |= 1
+    if GPIO.input(pins["bit1"]):
+        raw |= 2
+    if GPIO.input(pins["bit2"]):
+        raw |= 4
+    if GPIO.input(pins["bit3"]):
+        raw |= 8
+
+    # Inputs use pull-ups and switch contacts close to ground. Invert once.
+    value = raw ^ 0xF
+
+    if 0 <= value <= 9:
+        return value
+
+    return None
 
 
 def load_stations():
@@ -279,6 +304,50 @@ def load_stations():
 
 def clamp(val, lo, hi):
     return max(lo, min(hi, val))
+
+
+class DebouncedValue:
+    """Accept a complete control value only after it is stable for settle_time."""
+
+    def __init__(self, initial_value, settle_time=DEBOUNCE_TIME):
+        self.stable = initial_value
+        self.candidate = initial_value
+        self.candidate_since = time.monotonic()
+        self.settle_time = settle_time
+
+    def update(self, value, now):
+        """Return (old, new) when a new stable value is accepted, else None."""
+        # Invalid BCD codes are never accepted. They also break the stability
+        # window so a rotary must present a valid word continuously for 40 ms.
+        if value is None:
+            self.candidate = self.stable
+            self.candidate_since = now
+            return None
+
+        if value != self.candidate:
+            self.candidate = value
+            self.candidate_since = now
+            return None
+
+        if value != self.stable and now - self.candidate_since >= self.settle_time:
+            old_value = self.stable
+            self.stable = value
+            return old_value, value
+
+        return None
+
+
+def volume_direction(old_pos, new_pos):
+    """Return +1 for one CW step, -1 for one CCW step, 0 for a jump."""
+    if old_pos == 9 and new_pos == 0:
+        return 1
+    if old_pos == 0 and new_pos == 9:
+        return -1
+    if new_pos == old_pos + 1:
+        return 1
+    if new_pos == old_pos - 1:
+        return -1
+    return 0
 
 
 # ── OLED Display ──────────────────────────────────────────
@@ -553,14 +622,19 @@ def main():
 
     # ── GPIO setup ──
     GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
-    all_pins = (
-        list(STATION_PINS.values())
-        + list(VOLUME_PINS.values())
-        + [STOP_START_PIN]
-    )
-    for pin in all_pins:
+
+    for pin in BANK_PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    for pin in STATION_PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    for pin in VOLUME_PINS.values():
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    GPIO.setup(PLAY_PAUSE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(SHUTDOWN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
 
     # ── I2C / OLED display setup ──
     try:
@@ -587,48 +661,66 @@ def main():
 
     # ── Read initial switch positions ──
     cur_volume_pos = read_bcd(VOLUME_PINS)
-    if cur_volume_pos > 9:
+    if cur_volume_pos is None:
+        log.warning("Invalid volume switch position at startup; using 0 as reference")
         cur_volume_pos = 0
-    volume = max(VOLUME_MIN, min(VOLUME_MAX, VOLUME_MIN + cur_volume_pos * VOLUME_STEP))
+
+    cur_bank_pos = read_bcd(BANK_PINS)
+    if cur_bank_pos is None:
+        log.warning("Invalid bank switch position at startup; using 0")
+        cur_bank_pos = 0
 
     raw_station_pos = read_bcd(STATION_PINS)
-    if raw_station_pos > 9:
+    if raw_station_pos is None:
+        log.warning("Invalid station switch position at startup; using 0")
         raw_station_pos = 0
 
-    # Station index into the flat list — wraps using modulo
+    # Station remains a flat-list position until the bank/station YAML model is
+    # integrated in the next phase. The selector itself is treated as absolute.
     cur_station_index = raw_station_pos % num_stations
 
-    play_enabled = GPIO.input(STOP_START_PIN) == GPIO.LOW
+    # Physical maintained switches are authoritative at startup.
+    play_enabled = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+    shutdown_requested = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
 
-    # Restore saved state if available (e.g. after power loss)
+    # Volume position is only a direction reference. Software volume is restored
+    # from saved state when available; otherwise DEFAULT_VOLUME is used.
+    volume = DEFAULT_VOLUME
     if saved_state is not None:
         saved_volume = saved_state["volume"]
-        saved_station = saved_state["station"]
-        if 0 <= saved_station < num_stations:
-            cur_station_index = saved_station
-            log.info("Restored station %d from saved state", saved_station + 1)
         if VOLUME_MIN <= saved_volume <= VOLUME_MAX:
             volume = saved_volume
             log.info("Restored volume %d%% from saved state", saved_volume)
-        play_enabled = saved_state.get("play_enabled", play_enabled)
+
+    bank_debounce = DebouncedValue(cur_bank_pos)
+    station_debounce = DebouncedValue(raw_station_pos)
+    volume_debounce = DebouncedValue(cur_volume_pos)
+    play_debounce = DebouncedValue(play_enabled)
+    shutdown_debounce = DebouncedValue(shutdown_requested)
 
     playing_station_index = -1
-    last_station_switch_change = 0.0
-    last_volume_switch_change = 0.0
 
     # Set initial volume
     mpc("volume", str(volume))
 
-    # Play initial station
+    # Play initial station according to the maintained play/pause switch.
     if play_enabled and num_stations > 0:
         play_station(stations_list[cur_station_index])
         playing_station_index = cur_station_index
-    elif not play_enabled:
-        log.info("Stop/start switch is OFF at startup — stopped")
+    else:
+        log.info("Play/pause switch is PAUSE at startup")
         mpc("stop")
 
-    log.info("Initial: station=%d/%d volume=%d (pos %d) play=%s",
-             cur_station_index + 1, num_stations, volume, cur_volume_pos, play_enabled)
+    log.info(
+        "Initial: bank=%d station=%d/%d volume=%d (selector pos %d) play=%s shutdown=%s",
+        cur_bank_pos,
+        cur_station_index + 1,
+        num_stations,
+        volume,
+        cur_volume_pos,
+        play_enabled,
+        shutdown_requested,
+    )
 
     # Update display with initial state
     station_name = stations_list[cur_station_index].get("name", "Unknown") if num_stations > 0 else "---"
@@ -686,67 +778,121 @@ def main():
 
             # ── Read volume BCD switch ──
             raw_vol = read_bcd(VOLUME_PINS)
-            new_vol_pos = raw_vol if 0 <= raw_vol <= 9 else cur_volume_pos
+            volume_change = volume_debounce.update(raw_vol, now)
 
-            if new_vol_pos != cur_volume_pos:
-                if now - last_volume_switch_change >= DEBOUNCE_TIME:
-                    last_volume_switch_change = now
-                    delta = new_vol_pos - cur_volume_pos
-                    if delta > 5:
-                        delta -= 10
-                    elif delta < -5:
-                        delta += 10
-                    cur_volume_pos = new_vol_pos
-                    volume = max(VOLUME_MIN, min(VOLUME_MAX, volume + delta * VOLUME_STEP))
-                    mpc("volume", str(volume))
-                    log.info("Volume: pos %d → %d%% (step %+d)", cur_volume_pos, volume, delta * VOLUME_STEP)
-                    state_dirty = True
-                    display_dirty = True
+            if volume_change is not None:
+                old_pos, new_pos = volume_change
+                direction = volume_direction(old_pos, new_pos)
+                cur_volume_pos = new_pos
+
+                if direction != 0:
+                    old_volume = volume
+                    volume = clamp(
+                        volume + direction * VOLUME_STEP,
+                        VOLUME_MIN,
+                        VOLUME_MAX,
+                    )
+
+                    if volume != old_volume:
+                        mpc("volume", str(volume))
+                        log.info(
+                            "Volume selector %d -> %d; volume %d%% -> %d%%",
+                            old_pos,
+                            new_pos,
+                            old_volume,
+                            volume,
+                        )
+                        state_dirty = True
+                        display_dirty = True
+                    else:
+                        log.info(
+                            "Volume selector %d -> %d; already at limit %d%%",
+                            old_pos,
+                            new_pos,
+                            volume,
+                        )
+                else:
+                    # A non-adjacent jump can occur if intermediate positions were
+                    # skipped. Adopt the new physical reference but do not change gain.
+                    log.warning(
+                        "Volume selector jumped %d -> %d; reference updated, volume unchanged",
+                        old_pos,
+                        new_pos,
+                    )
+
+            # ── Read bank BCD switch ──
+            raw_bank = read_bcd(BANK_PINS)
+            bank_change = bank_debounce.update(raw_bank, now)
+
+            if bank_change is not None:
+                old_bank, new_bank = bank_change
+                cur_bank_pos = new_bank
+                log.info("Bank selector: %d -> %d", old_bank, new_bank)
+                # Bank selection will affect playback after the bank/station
+                # stations.yaml model is integrated in the next phase.
 
             # ── Read station BCD switch ──
             raw_station = read_bcd(STATION_PINS)
-            new_station_pos = raw_station if 0 <= raw_station <= 9 else raw_station_pos
+            station_change = station_debounce.update(raw_station, now)
 
-            if new_station_pos != raw_station_pos:
-                if now - last_station_switch_change >= DEBOUNCE_TIME:
-                    last_station_switch_change = now
-                    delta = new_station_pos - raw_station_pos
-                    if delta > 5:
-                        delta -= 10
-                    elif delta < -5:
-                        delta += 10
-                    raw_station_pos = new_station_pos
+            if station_change is not None:
+                old_pos, new_pos = station_change
+                raw_station_pos = new_pos
+                log.info("Station selector: %d -> %d", old_pos, new_pos)
 
-                    new_station_index = (cur_station_index + delta) % num_stations if num_stations > 0 else 0
-                    if new_station_index != cur_station_index:
-                        log.info("Station: %d → %d (knob pos %d)",
-                                 cur_station_index + 1, new_station_index + 1, raw_station_pos)
-                        cur_station_index = new_station_index
-                        state_dirty = True
+                # Temporary flat-list behavior until bank/station YAML integration.
+                new_station_index = new_pos % num_stations if num_stations > 0 else 0
 
-                    # Play new station if it differs from what's currently playing
+                if new_station_index != cur_station_index:
+                    cur_station_index = new_station_index
+                    state_dirty = True
+
                     if play_enabled and num_stations > 0:
-                        if cur_station_index != playing_station_index:
-                            play_station(stations_list[cur_station_index])
-                            playing_station_index = cur_station_index
-                            watchdog_stop_since = 0.0
-                            state_dirty = True
-                    display_dirty = True
-
-            # ── Stop/start switch ──
-            new_play = GPIO.input(STOP_START_PIN) == GPIO.LOW
-            if new_play != play_enabled:
-                play_enabled = new_play
-                if play_enabled:
-                    log.info("Stop/start switch → ON")
-                    if num_stations > 0:
                         play_station(stations_list[cur_station_index])
                         playing_station_index = cur_station_index
+                        watchdog_stop_since = 0.0
+
+                    display_dirty = True
+
+            # ── Play/pause switch ──
+            raw_play = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+            play_change = play_debounce.update(raw_play, now)
+
+            if play_change is not None:
+                _old_play, new_play = play_change
+                play_enabled = new_play
+
+                if play_enabled:
+                    log.info("Play/pause switch -> PLAY")
+                    if num_stations > 0:
+                        if playing_station_index == cur_station_index:
+                            mpc("pause", "0")
+                        else:
+                            play_station(stations_list[cur_station_index])
+                            playing_station_index = cur_station_index
+                        watchdog_stop_since = 0.0
                 else:
-                    log.info("Stop/start switch → OFF")
-                    mpc("stop")
+                    log.info("Play/pause switch -> PAUSE")
+                    mpc("pause", "1")
+
                 state_dirty = True
                 display_dirty = True
+
+            # ── Prepare-for-power-loss switch ──
+            raw_shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
+            shutdown_change = shutdown_debounce.update(raw_shutdown, now)
+
+            if shutdown_change is not None:
+                _old_shutdown, new_shutdown = shutdown_change
+                shutdown_requested = new_shutdown
+
+                if shutdown_requested:
+                    log.warning("Shutdown switch -> PREPARE FOR POWER LOSS")
+                else:
+                    log.info("Shutdown switch -> RUN")
+
+                # Intentionally do not power off yet. The shutdown sequence will be
+                # enabled only after this input is verified on hardware.
 
             # ── Stream watchdog ──
             if play_enabled and now - watchdog_last_check >= WATCHDOG_INTERVAL:
@@ -795,7 +941,7 @@ def main():
             time.sleep(1.0)
 
     # ── Graceful shutdown ──
-    log.info("Shutting down gracefully")
+    log.info("Shutting down radio process gracefully")
     save_state(volume, cur_station_index, play_enabled)
     if display:
         try:

@@ -1057,7 +1057,7 @@ def main():
                         and playing_station == cur_station_pos
                         and "[paused]" in mpc("status")
                     ):
-                        mpc("pause", "0")
+                        mpc("play")
                     else:
                         station = select_station(
                             banks,
@@ -1075,7 +1075,7 @@ def main():
                     watchdog_stop_since = 0.0
                 else:
                     log.info("Play/pause switch -> PAUSE")
-                    mpc("pause", "1")
+                    mpc("pause")
 
                 display_dirty = True
 

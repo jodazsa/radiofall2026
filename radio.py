@@ -6,7 +6,7 @@ Single script that handles:
 - BCD rotary switch for station selection (10 positions)
 - BCD rotary switch used as a relative volume control (10 positions)
 - Maintained play/pause switch
-- Maintained prepare-for-power-loss switch with orderly shutdown
+- Maintained power-loss standby switch with safe resume
 - 128x32 I2C OLED display
 - MPD playback via mpc commands
 - Stream watchdog (auto-restarts dead streams)
@@ -544,9 +544,9 @@ def update_display(
         font = _default_font
 
         if shutdown_requested:
-            line1 = "POWER LOSS REQUEST"
-            line2 = "Shutdown not armed"
-            line3 = f"Vol: {volume}%"
+            line1 = "OK to unplug"
+            line2 = "Flip rear switch"
+            line3 = "to ON to resume"
         else:
             state_text = "PLAY" if play_enabled else "PAUSE"
             line1 = f"B{bank_id} S{station_id}  {state_text}"
@@ -563,101 +563,90 @@ def update_display(
         log.warning("Display update failed: %s", e)
 
 
-def show_powering_off(display):
-    """Show a brief shutdown message while the system is still responsive."""
+def show_power_safe_display(display, boot_wait=False):
+    """Show the fixed message used while the rear switch requests safe standby."""
     if display is None:
         return
 
     try:
         image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT))
         draw = ImageDraw.Draw(image)
-        draw.text((0, 0), "POWERING OFF", font=_default_font, fill=255)
-        draw.text((0, 11), "Please wait...", font=_default_font, fill=255)
+
+        if boot_wait:
+            line1 = "Flip rear switch"
+            line2 = "to ON"
+            line3 = ""
+        else:
+            line1 = "OK to unplug"
+            line2 = "Flip rear switch"
+            line3 = "to ON to resume"
+
+        draw.text((0, 0), line1[:21], font=_default_font, fill=255)
+        draw.text((0, 11), line2[:21], font=_default_font, fill=255)
+        draw.text((0, 22), line3[:21], font=_default_font, fill=255)
 
         display.image(image)
         display.show()
-
-        # Give the user a moment to see the shutdown message.
-        time.sleep(0.75)
     except Exception as e:
-        log.warning("OLED shutdown message failed: %s", e)
+        log.warning("Power-safe display update failed: %s", e)
 
 
-def power_down_display(display):
-    """Blank the OLED and put it into its low-power state when supported."""
-    if display is None:
-        return
+def enter_power_safe_state(display, volume, boot_wait=False):
+    """Stop radio activity, persist volume, flush writes, and show safe standby."""
+    if boot_wait:
+        log.warning("Rear switch is OFF at boot; waiting in power-loss standby")
+    else:
+        log.warning("Entering power-loss standby")
 
-    try:
-        display.fill(0)
-        display.show()
-
-        # CircuitPython SSD1306 supports poweroff(); keep this defensive
-        # in case a future display implementation does not.
-        poweroff_method = getattr(display, "poweroff", None)
-        if callable(poweroff_method):
-            poweroff_method()
-    except Exception as e:
-        log.warning("OLED shutdown failed: %s", e)
-
-
-def prepare_for_power_loss(display, volume):
-    """Safely prepare the radio and operating system for removal of power."""
-    log.warning("Preparing radio for power loss")
-
-    # Silence playback immediately.
+    # Stop audio and leave the ALSA/MPD software volume muted.
     mpc("stop")
 
-    # Preserve the user's real software volume before temporarily muting MPD.
-    save_state(volume)
+    # At runtime, persist the user's actual volume before temporarily muting MPD.
+    # At boot there is no new volume state to save; use the previously persisted value.
+    if not boot_wait:
+        save_state(volume)
 
-    # Leave the audio path muted while the machine shuts down.
     mpc("volume", "0")
 
-    # Flush our persisted state and other pending filesystem writes.
+    # Flush pending filesystem writes before telling the user it is OK to unplug.
     try:
         os.sync()
-        log.info("Filesystem writes flushed")
+        log.info("Filesystem writes flushed for power-loss standby")
     except Exception as e:
         log.warning("Filesystem sync failed: %s", e)
 
-    # Tell the user what is happening before asking systemd to power off.
-    # Keep the panel powered until the request succeeds so a failed request
-    # can return to normal operation without needing to reinitialize the OLED.
-    show_powering_off(display)
+    show_power_safe_display(display, boot_wait=boot_wait)
 
-    # Flush once more after all shutdown preparation is complete.
-    try:
-        os.sync()
-    except Exception:
-        pass
 
-    log.warning("Requesting orderly system poweroff")
+def wait_for_power_safe_release(display, volume, boot_wait=False):
+    """Remain in power-safe standby until the maintained rear switch returns to ON."""
+    enter_power_safe_state(display, volume, boot_wait=boot_wait)
 
-    try:
-        result = subprocess.run(
-            ["systemctl", "--no-block", "poweroff"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception as e:
-        log.error("Unable to request system poweroff: %s", e)
-        return False
+    # The switch entered this function in the asserted/OFF state.  Use the same
+    # 40 ms stable debounce rule before accepting a return to ON.
+    rear_debounce = DebouncedValue(True)
+    last_watchdog_notify = 0.0
 
-    if result.returncode != 0:
-        error = (result.stderr or result.stdout or "").strip()
-        log.error(
-            "systemctl poweroff failed (code %d): %s",
-            result.returncode,
-            error,
-        )
-        return False
+    while not _shutdown:
+        now = time.monotonic()
+        raw_shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
+        change = rear_debounce.update(raw_shutdown, now)
 
-    # The orderly shutdown request was accepted; the display can now be blanked.
-    power_down_display(display)
-    log.warning("System poweroff successfully requested")
-    return True
+        if change is not None:
+            _old_state, new_state = change
+            if not new_state:
+                log.info("Rear switch -> ON; leaving power-loss standby")
+                return True
+
+        # radio.service has a systemd watchdog.  The controller must keep feeding
+        # it while intentionally waiting in standby or systemd would restart us.
+        if now - last_watchdog_notify >= WATCHDOG_NOTIFY_INTERVAL:
+            _notify_watchdog()
+            last_watchdog_notify = now
+
+        time.sleep(POLL_INTERVAL)
+
+    return False
 
 
 # -----------------------------------------------------------------------------
@@ -910,10 +899,8 @@ def main():
     log.info("Radio controller starting")
     log.info("=" * 40)
 
-    if not wait_for_mpd():
-        sys.exit(1)
-
-    # GPIO setup
+    # GPIO setup comes before waiting for MPD so the rear standby switch and
+    # OLED remain usable even if MPD is unavailable.
     GPIO.setmode(GPIO.BCM)
 
     for pin in BANK_PINS.values():
@@ -971,9 +958,6 @@ def main():
     playing_bank = None
     playing_station = None
 
-    # Apply initial software volume.
-    mpc("volume", str(volume))
-
     log.info(
         "Initial controls: bank=%d station=%d volume=%d%% volume_pos=%d play=%s shutdown=%s",
         cur_bank_pos,
@@ -985,18 +969,48 @@ def main():
     )
     log.info("Initial selection: %s", describe_selection(banks, cur_bank_pos, cur_station_pos))
 
+    # If power is applied while the rear switch is OFF, do not enter radio mode.
+    # Stay alive, muted, and responsive to that switch so the user can return to
+    # normal operation without another power cycle.
     if shutdown_requested:
-        log.warning(
-            "Shutdown switch is already in PREPARE FOR POWER LOSS position at startup"
-        )
+        # radio.service uses Type=notify.  Mark the controller ready before an
+        # indefinite boot-time standby wait, then keep feeding the watchdog there.
+        _notify_ready()
 
-        if prepare_for_power_loss(display, volume):
+        if not wait_for_power_safe_release(display, volume, boot_wait=True):
             GPIO.cleanup()
             return
 
-        log.error("Poweroff request failed; continuing radio operation")
         shutdown_requested = False
-        mpc("volume", str(volume))
+
+        # Controls may have moved while we were waiting.  Re-read everything and
+        # use the current volume-selector position only as the new relative reference.
+        cur_volume_pos = read_stable_bcd_at_startup(VOLUME_PINS, "volume")
+        cur_bank_pos = read_stable_bcd_at_startup(BANK_PINS, "bank")
+        cur_station_pos = read_stable_bcd_at_startup(STATION_PINS, "station")
+        play_enabled = read_stable_switch_at_startup(PLAY_PAUSE_PIN, "play/pause")
+
+        bank_debounce = DebouncedValue(cur_bank_pos)
+        station_debounce = DebouncedValue(cur_station_pos)
+        volume_debounce = DebouncedValue(cur_volume_pos)
+        play_debounce = DebouncedValue(play_enabled)
+        shutdown_debounce = DebouncedValue(False)
+
+        log.info(
+            "Controls after standby: bank=%d station=%d volume=%d%% volume_pos=%d play=%s",
+            cur_bank_pos,
+            cur_station_pos,
+            volume,
+            cur_volume_pos,
+            play_enabled,
+        )
+
+    if not wait_for_mpd():
+        GPIO.cleanup()
+        sys.exit(1)
+
+    # Apply the persisted software volume only after the rear switch allows RUN.
+    mpc("volume", str(volume))
 
     if play_enabled:
         station = select_station(banks, cur_bank_pos, cur_station_pos, True)
@@ -1189,7 +1203,8 @@ def main():
 
                 display_dirty = True
 
-            # Prepare-for-power-loss switch: perform an orderly system shutdown.
+            # Rear power-loss switch.  When asserted, stop all radio activity and
+            # block here while polling only that maintained switch.
             raw_shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
             shutdown_change = shutdown_debounce.update(raw_shutdown, now)
 
@@ -1198,15 +1213,33 @@ def main():
                 shutdown_requested = new_shutdown
 
                 if shutdown_requested:
-                    log.warning("Shutdown switch -> PREPARE FOR POWER LOSS")
+                    log.warning("Rear switch -> POWER-LOSS STANDBY")
 
-                    if prepare_for_power_loss(display, volume):
-                        # Exit the controller cleanly after the poweroff request.
+                    if not wait_for_power_safe_release(display, volume, boot_wait=False):
                         break
 
-                    log.error("Poweroff request failed; radio will continue running")
+                    # The rear switch is back ON.  Ignore all control movement that
+                    # occurred during standby and establish fresh physical references.
                     shutdown_requested = False
+                    cur_volume_pos = read_stable_bcd_at_startup(VOLUME_PINS, "volume")
+                    cur_bank_pos = read_stable_bcd_at_startup(BANK_PINS, "bank")
+                    cur_station_pos = read_stable_bcd_at_startup(STATION_PINS, "station")
+                    play_enabled = read_stable_switch_at_startup(
+                        PLAY_PAUSE_PIN, "play/pause"
+                    )
+
+                    bank_debounce = DebouncedValue(cur_bank_pos)
+                    station_debounce = DebouncedValue(cur_station_pos)
+                    volume_debounce = DebouncedValue(cur_volume_pos)
+                    play_debounce = DebouncedValue(play_enabled)
+                    shutdown_debounce = DebouncedValue(False)
+
+                    # Restore the software volume saved on standby entry.
                     mpc("volume", str(volume))
+
+                    playing_bank = None
+                    playing_station = None
+                    watchdog_stop_since = 0.0
 
                     if play_enabled:
                         station = select_station(
@@ -1218,15 +1251,36 @@ def main():
                         if station is not None:
                             playing_bank = cur_bank_pos
                             playing_station = cur_station_pos
-                            watchdog_stop_since = 0.0
-                        else:
-                            playing_bank = None
-                            playing_station = None
+                    else:
+                        mpc("stop")
 
-                    display_dirty = True
+                    log.info(
+                        "Radio resumed: bank=%d station=%d volume=%d%% volume_pos=%d play=%s",
+                        cur_bank_pos,
+                        cur_station_pos,
+                        volume,
+                        cur_volume_pos,
+                        play_enabled,
+                    )
+
+                    update_display(
+                        display,
+                        cur_bank_pos,
+                        cur_station_pos,
+                        selected_station_name(banks, cur_bank_pos, cur_station_pos),
+                        volume,
+                        play_enabled,
+                        False,
+                    )
+                    last_display_update = time.monotonic()
+                    display_dirty = False
+                    state_dirty = False
+                    watchdog_last_check = time.monotonic()
+                    last_watchdog_notify = time.monotonic()
+                    continue
 
                 else:
-                    log.info("Shutdown switch -> RUN")
+                    log.info("Rear switch -> ON")
                     display_dirty = True
 
 
@@ -1289,7 +1343,7 @@ def main():
             log.error("Error: %s", e, exc_info=True)
             time.sleep(1.0)
 
-    # Application shutdown (SIGTERM/SIGINT), not the physical power-loss switch.
+    # Application shutdown (SIGTERM/SIGINT).  Rear-switch standby does not exit.
     log.info("Shutting down radio process gracefully")
     save_state(volume)
 

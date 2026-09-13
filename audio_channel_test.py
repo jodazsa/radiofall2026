@@ -61,7 +61,7 @@ def main():
     print()
 
     subprocess.run(
-        ["aplay", "-D", "default", str(OUTPUT)],
+        ["aplay", "-D", "radio_mono", str(OUTPUT)],
         check=True,
     )
 

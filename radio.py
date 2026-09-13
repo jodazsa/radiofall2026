@@ -6,7 +6,7 @@ Single script that handles:
 - BCD rotary switch for station selection (10 positions)
 - BCD rotary switch used as a relative volume control (10 positions)
 - Maintained play/pause switch
-- Maintained prepare-for-power-loss switch (logged only for now)
+- Maintained prepare-for-power-loss switch with orderly shutdown
 - 128x32 I2C OLED display
 - MPD playback via mpc commands
 - Stream watchdog (auto-restarts dead streams)
@@ -563,6 +563,103 @@ def update_display(
         log.warning("Display update failed: %s", e)
 
 
+def show_powering_off(display):
+    """Show a brief shutdown message while the system is still responsive."""
+    if display is None:
+        return
+
+    try:
+        image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT))
+        draw = ImageDraw.Draw(image)
+        draw.text((0, 0), "POWERING OFF", font=_default_font, fill=255)
+        draw.text((0, 11), "Please wait...", font=_default_font, fill=255)
+
+        display.image(image)
+        display.show()
+
+        # Give the user a moment to see the shutdown message.
+        time.sleep(0.75)
+    except Exception as e:
+        log.warning("OLED shutdown message failed: %s", e)
+
+
+def power_down_display(display):
+    """Blank the OLED and put it into its low-power state when supported."""
+    if display is None:
+        return
+
+    try:
+        display.fill(0)
+        display.show()
+
+        # CircuitPython SSD1306 supports poweroff(); keep this defensive
+        # in case a future display implementation does not.
+        poweroff_method = getattr(display, "poweroff", None)
+        if callable(poweroff_method):
+            poweroff_method()
+    except Exception as e:
+        log.warning("OLED shutdown failed: %s", e)
+
+
+def prepare_for_power_loss(display, volume):
+    """Safely prepare the radio and operating system for removal of power."""
+    log.warning("Preparing radio for power loss")
+
+    # Silence playback immediately.
+    mpc("stop")
+
+    # Preserve the user's real software volume before temporarily muting MPD.
+    save_state(volume)
+
+    # Leave the audio path muted while the machine shuts down.
+    mpc("volume", "0")
+
+    # Flush our persisted state and other pending filesystem writes.
+    try:
+        os.sync()
+        log.info("Filesystem writes flushed")
+    except Exception as e:
+        log.warning("Filesystem sync failed: %s", e)
+
+    # Tell the user what is happening before asking systemd to power off.
+    # Keep the panel powered until the request succeeds so a failed request
+    # can return to normal operation without needing to reinitialize the OLED.
+    show_powering_off(display)
+
+    # Flush once more after all shutdown preparation is complete.
+    try:
+        os.sync()
+    except Exception:
+        pass
+
+    log.warning("Requesting orderly system poweroff")
+
+    try:
+        result = subprocess.run(
+            ["systemctl", "--no-block", "poweroff"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as e:
+        log.error("Unable to request system poweroff: %s", e)
+        return False
+
+    if result.returncode != 0:
+        error = (result.stderr or result.stdout or "").strip()
+        log.error(
+            "systemctl poweroff failed (code %d): %s",
+            result.returncode,
+            error,
+        )
+        return False
+
+    # The orderly shutdown request was accepted; the display can now be blanked.
+    power_down_display(display)
+    log.warning("System poweroff successfully requested")
+    return True
+
+
 # -----------------------------------------------------------------------------
 # Playback
 # -----------------------------------------------------------------------------
@@ -888,6 +985,19 @@ def main():
     )
     log.info("Initial selection: %s", describe_selection(banks, cur_bank_pos, cur_station_pos))
 
+    if shutdown_requested:
+        log.warning(
+            "Shutdown switch is already in PREPARE FOR POWER LOSS position at startup"
+        )
+
+        if prepare_for_power_loss(display, volume):
+            GPIO.cleanup()
+            return
+
+        log.error("Poweroff request failed; continuing radio operation")
+        shutdown_requested = False
+        mpc("volume", str(volume))
+
     if play_enabled:
         station = select_station(banks, cur_bank_pos, cur_station_pos, True)
         if station is not None:
@@ -1079,7 +1189,7 @@ def main():
 
                 display_dirty = True
 
-            # Prepare-for-power-loss switch. For now, only log/display it.
+            # Prepare-for-power-loss switch: perform an orderly system shutdown.
             raw_shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
             shutdown_change = shutdown_debounce.update(raw_shutdown, now)
 
@@ -1089,10 +1199,36 @@ def main():
 
                 if shutdown_requested:
                     log.warning("Shutdown switch -> PREPARE FOR POWER LOSS")
+
+                    if prepare_for_power_loss(display, volume):
+                        # Exit the controller cleanly after the poweroff request.
+                        break
+
+                    log.error("Poweroff request failed; radio will continue running")
+                    shutdown_requested = False
+                    mpc("volume", str(volume))
+
+                    if play_enabled:
+                        station = select_station(
+                            banks,
+                            cur_bank_pos,
+                            cur_station_pos,
+                            True,
+                        )
+                        if station is not None:
+                            playing_bank = cur_bank_pos
+                            playing_station = cur_station_pos
+                            watchdog_stop_since = 0.0
+                        else:
+                            playing_bank = None
+                            playing_station = None
+
+                    display_dirty = True
+
                 else:
                     log.info("Shutdown switch -> RUN")
+                    display_dirty = True
 
-                display_dirty = True
 
             # Stream watchdog.
             if play_enabled and now - watchdog_last_check >= WATCHDOG_INTERVAL:

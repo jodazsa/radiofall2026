@@ -1,213 +1,203 @@
-# Windows → Raspberry Pi Audio Transfer Guide
+# Audio Transfer Guide
 
-This guide copies your Windows audio library into the exact relative paths expected by `stations.yaml`.
+This is about getting offline audio from the Windows computer onto the Pi.
 
-## Goal
+## Where Audio Goes
 
-Your `stations.yaml` uses paths relative to:
+All local audio lives here on the Pi:
 
-- `/home/pi/audio/`
-
-So:
-
-- Windows folder `C:\Users\J\Documents\Radio_Project\Sync\Audio\music\shows\AliceCooper`
-  becomes Pi folder `/home/pi/audio/shows/AliceCooper`
-- Windows file `C:\Users\J\Documents\Radio_Project\Sync\Audio\music\tracks\The Blue Ark - GTA V.mp3`
-  becomes Pi file `/home/pi/audio/tracks/The Blue Ark - GTA V.mp3`
-
-## Path mapping rule
-
-Copy the **contents of**:
-
-- `C:\Users\J\Documents\Radio_Project\Sync\Audio\music\`
-
-into:
-
-- `/home/pi/audio/`
-
-That preserves all relative paths used in `stations.yaml` (for example `shows/...` and `tracks/...`).
-
-## 0) One-time prep on the Pi (important)
-
-The `pi` user often cannot write directly to `/home/pi/audio` until it exists and permissions are set.
-
-SSH in and run:
-
-```bash
-ssh pi@tivo.local
-sudo mkdir -p /home/pi/audio
-sudo chown -R pi:pi /home/pi/audio
+```text
+/home/pi/audio/
 ```
 
-If `tivo.local` is flaky, use your Pi IP instead:
+The two main folders are:
 
-```bash
-ssh pi@192.168.1.50
+```text
+/home/pi/audio/tracks/
+/home/pi/audio/shows/
 ```
 
-## Option A (recommended): copy everything in one command
+Keep the folder names exactly the same as the paths in `stations.yaml`.
 
-Use username `pi` in the commands below. (If your Pi uses a different login, replace `pi` with that username.)
+## Example
 
-Run this from **PowerShell on your Windows PC**:
+If `stations.yaml` says:
+
+```yaml
+name: "Bob Dylan"
+type: dir
+path: "shows/BobDylan"
+```
+
+the files go here:
+
+```text
+/home/pi/audio/shows/BobDylan/
+```
+
+If it says:
+
+```yaml
+name: "Muji BGM"
+type: file
+path: "tracks/Muji BGM 1980-2000.mp3"
+```
+
+the file goes here:
+
+```text
+/home/pi/audio/tracks/Muji BGM 1980-2000.mp3
+```
+
+That's basically the whole system.
+
+## Make Sure the Pi Folders Exist
+
+SSH into the Pi:
+
+```bash
+ssh pi@radiofall2026
+```
+
+Then:
+
+```bash
+mkdir -p /home/pi/audio/tracks
+mkdir -p /home/pi/audio/shows
+```
+
+## Copy Files With PowerShell
+
+To copy one file:
 
 ```powershell
-scp -4 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\*" pi@tivo.local:/home/pi/audio/
+scp "C:\path\to\song.mp3" pi@radiofall2026:/home/pi/audio/tracks/
 ```
 
-If `tivo.local` does not resolve reliably, replace it with your Pi IP:
+To copy one show folder:
 
 ```powershell
-scp -4 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\*" pi@192.168.1.50:/home/pi/audio/
+scp -r "C:\path\to\BobDylan" pi@radiofall2026:/home/pi/audio/shows/
 ```
 
-## Option B: copy only specific items
-
-### Copy one show directory
+For a big transfer, add SSH keepalives:
 
 ```powershell
-scp -4 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\shows\AliceCooper" pi@tivo.local:/home/pi/audio/shows/
+scp -4 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r `
+  "C:\path\to\audio\*" `
+  pi@radiofall2026:/home/pi/audio/
 ```
 
-### Copy one track file
+If the hostname doesn't work, use the Pi's IP address instead.
 
-```powershell
-scp -4 "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\tracks\The Blue Ark - GTA V.mp3" pi@tivo.local:/home/pi/audio/tracks/
-```
+## Better Option for Big Libraries: rsync
 
+If you're using WSL, `rsync` is nicer for large transfers because you can run it again and it only copies what is missing or changed.
 
-## Option C: Use WSL + `rsync` (best for large or flaky transfers)
-
-If you have WSL installed, `rsync` is usually more reliable than `scp` for big libraries because you can resume interrupted transfers.
-
-### 1) In WSL, install rsync once
+Example:
 
 ```bash
-sudo apt update
-sudo apt install -y rsync openssh-client
+rsync -avh --progress --partial \
+  /mnt/c/path/to/audio/ \
+  pi@radiofall2026:/home/pi/audio/
 ```
 
-### 2) Make sure destination exists on Pi
+
+## After Copying Audio
+
+Tell MPD to rescan:
 
 ```bash
-ssh pi@tivo.local "sudo mkdir -p /home/pi/audio && sudo chown -R pi:pi /home/pi/audio"
-```
-
-### 3) Run rsync from WSL
-
-```bash
-rsync -avh --progress --partial --append-verify \
-  /mnt/c/Users/J/Documents/Radio_Project/Sync/Audio/music/ \
-  pi@tivo.local:/home/pi/audio/
-```
-
-Notes:
-- The trailing `/` on `music/` is important; it copies the contents into `/home/pi/audio/`.
-- If `tivo.local` is unreliable, replace it with your Pi IP.
-- Re-run the same command anytime; `rsync` sends only changed/missing data.
-
-### 4) Verify and refresh library
-
-```bash
-ssh pi@tivo.local
-ls -lah /home/pi/audio/shows/AliceCooper
-ls -lah "/home/pi/audio/tracks/The Blue Ark - GTA V.mp3"
 mpc update
 ```
 
-## Verify on the Pi
+You can check progress with:
+
+```bash
+mpc status
+```
+
+## Check What's There
+
+Tracks:
+
+```bash
+find /home/pi/audio/tracks -maxdepth 1 -type f
+```
+
+Shows:
+
+```bash
+find /home/pi/audio/shows -maxdepth 2 -type f
+```
+
+## Supported Audio Types
+
+The radio accepts:
+
+```text
+.mp3
+.flac
+.ogg
+.m4a
+.wav
+.aac
+```
+
+## Common Problems
+
+### Station does nothing
+
+Usually the path in `stations.yaml` doesn't exactly match the real file or directory.
+
+Check:
+
+```bash
+ls -lah /home/pi/audio/
+```
+
+and compare it to the path in `stations.yaml`.
+
+### Filename has spaces
+
+Just put quotes around it when using shell commands.
+
+Example:
+
+```bash
+ls -lah "/home/pi/audio/tracks/Muji BGM 1980-2000.mp3"
+```
+
+### Transfer stopped halfway through
+
+Just run the copy again.
+
+For a large library, use `rsync`.
+
+
+### Audio was copied but MPD doesn't see it
 
 Run:
 
 ```bash
-ls -lah /home/pi/audio/shows/AliceCooper
-ls -lah "/home/pi/audio/tracks/The Blue Ark - GTA V.mp3"
-```
-
-Then refresh MPD's library:
-
-```bash
 mpc update
 ```
 
-## Fixes for the exact errors you saw
+Then give it a moment.
 
-### Error: `Connection closed by ... port 22`
+## One Rule That Saves a Lot of Trouble
 
-Usually DNS/IPv6/network instability. Try:
+If `stations.yaml` says:
 
-1. Confirm SSH works first:
-   ```powershell
-   ssh -4 pi@tivo.local
-   ```
-2. If that fails, use IP instead of mDNS name:
-   ```powershell
-   ssh -4 pi@192.168.1.50
-   ```
-3. Re-run `scp` with `-4` and the same host form that worked for SSH.
-
-### Error: `stat remote: No such file or directory`
-
-This means the destination path did not exist (or was not writable). Fix it on Pi:
-
-```bash
-sudo mkdir -p /home/pi/audio/{shows,tracks}
-sudo chown -R pi:pi /home/pi/audio
+```text
+shows/BobDylan
 ```
 
-Then retry the same `scp` command.
+then the Pi needs:
 
-
-### Error: `Broken pipe` / `Connection reset` during a large copy
-
-This usually means Wi-Fi briefly dropped or SSH timed out during a long transfer.
-
-Try these fixes (in order):
-
-1. Use SSH keepalives and IPv4:
-   ```powershell
-   scp -4 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\*" pi@tivo.local:/home/pi/audio/
-   ```
-2. Copy in smaller chunks instead of everything at once:
-   ```powershell
-   scp -4 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\shows\*" pi@tivo.local:/home/pi/audio/shows/
-   scp -4 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\tracks\*" pi@tivo.local:/home/pi/audio/tracks/
-   ```
-3. If it still drops, use Pi IP instead of `tivo.local`:
-   ```powershell
-   scp -4 -o ServerAliveInterval=30 -o ServerAliveCountMax=6 -r "C:\Users\J\Documents\Radio_Project\Sync\Audio\music\tracks\*" pi@192.168.1.50:/home/pi/audio/tracks/
-   ```
-4. Re-run the same command; files that already finished will be skipped/overwritten quickly, and remaining files continue.
-
-Tip: A wired Ethernet connection for the transfer is much more reliable than Wi-Fi for large libraries.
-
-## Quick sanity check against `stations.yaml`
-
-If a station has:
-
-```yaml
-type: dir
-path: "shows/AliceCooper"
+```text
+/home/pi/audio/shows/BobDylan
 ```
 
-then the Pi must have:
+Same relative path.
 
-- `/home/pi/audio/shows/AliceCooper`
-
-If a station has:
-
-```yaml
-type: file
-path: "tracks/The Blue Ark - GTA V.mp3"
-```
-
-then the Pi must have:
-
-- `/home/pi/audio/tracks/The Blue Ark - GTA V.mp3`
-
-## Common mistakes to avoid
-
-- Copying `music` into `/home/pi/audio/music` (adds an extra folder level and breaks paths).
-- Copying to `/home/pi/...` instead of `/home/pi/audio/...`.
-- Forgetting quotes around paths that contain spaces.
-- Forgetting to run `mpc update` after adding new files.

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 echo "======================================"
-echo "Radio runtime setup"
+echo "RadioFall2026 runtime setup"
 echo "======================================"
 
 if [ "${EUID}" -eq 0 ]; then
@@ -39,21 +39,19 @@ sudo apt install -y \
 echo
 echo "2. Configuring GPIO interfaces..."
 
-# OLED requires I2C.
+# OLED uses I2C.
 sudo raspi-config nonint do_i2c 0
 
-# GPIO10/GPIO9 are used by SW1/SW2, so SPI must not own them.
+# GPIO10/GPIO9 are used by the maintained switches.
 sudo raspi-config nonint do_spi 1
 
 # GPIO14/GPIO15 are used by the volume selector.
-# Disable both serial console and UART hardware.
 sudo raspi-config nonint do_serial_cons 1
 sudo raspi-config nonint do_serial_hw 1
 
 echo
 echo "3. Configuring HiFiBerry MiniAmp..."
 
-# Disable built-in Raspberry Pi audio if it is explicitly enabled.
 if grep -qE '^[[:space:]]*dtparam=audio=on[[:space:]]*$' "$BOOT_CONFIG"; then
     sudo sed -i \
         's/^[[:space:]]*dtparam=audio=on[[:space:]]*$/dtparam=audio=off/' \
@@ -64,7 +62,6 @@ if ! grep -qE '^[[:space:]]*dtparam=audio=off[[:space:]]*$' "$BOOT_CONFIG"; then
     echo 'dtparam=audio=off' | sudo tee -a "$BOOT_CONFIG" >/dev/null
 fi
 
-# MiniAmp uses the HiFiBerry DAC overlay.
 if ! grep -qE '^[[:space:]]*dtoverlay=hifiberry-dac([[:space:]]|$)' "$BOOT_CONFIG"; then
     echo 'dtoverlay=hifiberry-dac' | sudo tee -a "$BOOT_CONFIG" >/dev/null
 fi
@@ -93,17 +90,11 @@ sudo mkdir -p /home/pi/audio
 sudo chown pi:pi /home/pi/audio
 sudo chmod 0755 /home/pi/audio
 
-# Ensure MPD is allowed to open ALSA devices.
 sudo usermod -aG audio mpd
-
-sudo systemctl enable mpd
-
-# Do not try to validate audio until after the HiFiBerry overlay has
-# been loaded by a reboot.
-sudo systemctl stop mpd || true
+sudo systemctl enable mpd.service
 
 echo
-echo "6. Creating radio Python virtual environment..."
+echo "6. Creating radio Python environment..."
 
 if [ ! -d /opt/radio-venv ]; then
     sudo python3 -m venv \
@@ -117,9 +108,57 @@ sudo /opt/radio-venv/bin/python3 -m pip install \
     -r "$SCRIPT_DIR/requirements-pi.txt"
 
 echo
+echo "7. Installing radio files..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/radio.py" \
+    /usr/local/bin/radio.py
+
+sudo install \
+    -o pi \
+    -g pi \
+    -m 0644 \
+    "$SCRIPT_DIR/stations.yaml" \
+    /home/pi/stations.yaml
+
+echo
+echo "8. Installing radio service..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio.service" \
+    /etc/systemd/system/radio.service
+
+echo
+echo "9. Configuring volatile journal..."
+
+sudo mkdir -p /etc/systemd/journald.conf.d
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/config/radio-volatile.conf" \
+    /etc/systemd/journald.conf.d/radio-volatile.conf
+
+echo
+echo "10. Enabling services..."
+
+sudo systemctl daemon-reload
+sudo systemctl enable mpd.service
+sudo systemctl enable radio.service
+
+echo
 echo "======================================"
 echo "Runtime setup complete."
 echo
-echo "A reboot is required before testing"
-echo "the HiFiBerry audio device."
+echo "Reboot before using the radio:"
+echo
+echo "    sudo reboot"
+echo
 echo "======================================"

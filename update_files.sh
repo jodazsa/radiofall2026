@@ -1,19 +1,65 @@
-#!/bin/bash
-# update_files.sh — Deploy updated radio files and restart the service
+#!/usr/bin/env bash
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-echo "→ Deploying radio.py..."
-sudo cp "$SCRIPT_DIR/radio.py" /usr/local/bin/radio.py
-sudo chmod +x /usr/local/bin/radio.py
+echo "======================================"
+echo "Deploying RadioFall2026"
+echo "======================================"
 
-echo "→ Syncing stations.yaml..."
-sudo cp "$SCRIPT_DIR/stations.yaml" /home/pi/stations.yaml
-sudo chown pi:pi /home/pi/stations.yaml
+echo
+echo "Installing radio.py..."
 
-echo "→ Restarting radio service..."
+sudo install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/radio.py" \
+    /usr/local/bin/radio.py
+
+echo
+echo "Installing stations.yaml..."
+
+sudo install \
+    -o pi \
+    -g pi \
+    -m 0644 \
+    "$SCRIPT_DIR/stations.yaml" \
+    /home/pi/stations.yaml
+
+echo
+echo "Installing radio.service..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio.service" \
+    /etc/systemd/system/radio.service
+
+echo
+echo "Reloading systemd..."
+
 sudo systemctl daemon-reload
-sudo systemctl restart radio
 
-echo "=== Files deployed ==="
+echo
+echo "Restarting radio..."
+
+sudo systemctl restart radio.service
+
+echo
+echo "Checking service..."
+
+if systemctl is-active --quiet radio.service; then
+    echo "Radio is running."
+else
+    echo "ERROR: radio.service did not start."
+    sudo systemctl status radio.service --no-pager
+    exit 1
+fi
+
+echo
+echo "======================================"
+echo "Deployment complete."
+echo "======================================"

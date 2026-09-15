@@ -185,7 +185,7 @@ mpc update
 
 Then give it a moment.
 
-## One Rule That Saves a Lot of Trouble
+## Rule That Saves Some Trouble
 
 If `stations.yaml` says:
 

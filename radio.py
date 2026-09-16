@@ -5,7 +5,7 @@ Single script that handles:
 - BCD rotary switch for bank selection (10 positions)
 - BCD rotary switch for station selection (10 positions)
 - BCD rotary switch used as a relative volume control (10 positions)
-- Maintained play/pause switch
+- Maintained play/stop switch
 - Maintained power-loss standby switch with safe resume
 - 128x32 I2C OLED display
 - MPD playback via mpc commands
@@ -13,7 +13,7 @@ Single script that handles:
 - Volume persistence across power loss
 - Systemd watchdog integration
 
-Bank, station, play/pause, and shutdown states are physical maintained controls and
+Bank, station, play/stop, and shutdown states are physical maintained controls and
 are therefore read from hardware at startup rather than restored from disk.
 """
 
@@ -83,7 +83,7 @@ STATION_PINS = {
 }
 
 # Maintained SPST switches
-PLAY_PAUSE_PIN = 10  # SW1, physical 19 (MOSI)
+PLAY_STOP_PIN = 10  # SW1, physical 19 (MOSI)
 SHUTDOWN_PIN = 9     # SW2, physical 21 (MISO)
 
 # Physical 22(GPIO25), 23(GPIO11/SCLK), 24(GPIO8/CE0), and 26(GPIO7/CE1)
@@ -548,7 +548,7 @@ def update_display(
             line2 = "Flip rear switch"
             line3 = "to ON to resume"
         else:
-            state_text = "PLAY" if play_enabled else "PAUSE"
+            state_text = "PLAY" if play_enabled else "STOP"
             line1 = f"B{bank_id} S{station_id}  {state_text}"
             line2 = station_name[:21] if station_name else "---"
             line3 = f"Vol: {volume}%"
@@ -910,7 +910,7 @@ def main():
     for pin in VOLUME_PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-    GPIO.setup(PLAY_PAUSE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(PLAY_STOP_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(SHUTDOWN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
     # OLED setup
@@ -940,7 +940,7 @@ def main():
     cur_volume_pos = read_stable_bcd_at_startup(VOLUME_PINS, "volume")
     cur_bank_pos = read_stable_bcd_at_startup(BANK_PINS, "bank")
     cur_station_pos = read_stable_bcd_at_startup(STATION_PINS, "station")
-    play_enabled = read_stable_switch_at_startup(PLAY_PAUSE_PIN, "play/pause")
+    play_enabled = read_stable_switch_at_startup(PLAY_STOP_PIN, "play/stop")
     shutdown_requested = read_stable_switch_at_startup(SHUTDOWN_PIN, "shutdown")
 
     # Software volume persists; physical volume selector position is only the
@@ -988,7 +988,7 @@ def main():
         cur_volume_pos = read_stable_bcd_at_startup(VOLUME_PINS, "volume")
         cur_bank_pos = read_stable_bcd_at_startup(BANK_PINS, "bank")
         cur_station_pos = read_stable_bcd_at_startup(STATION_PINS, "station")
-        play_enabled = read_stable_switch_at_startup(PLAY_PAUSE_PIN, "play/pause")
+        play_enabled = read_stable_switch_at_startup(PLAY_STOP_PIN, "play/stop")
 
         bank_debounce = DebouncedValue(cur_bank_pos)
         station_debounce = DebouncedValue(cur_station_pos)
@@ -1018,7 +1018,7 @@ def main():
             playing_bank = cur_bank_pos
             playing_station = cur_station_pos
     else:
-        log.info("Play/pause switch is PAUSE at startup")
+        log.info("Play/stop switch is STOP at startup")
         mpc("stop")
 
     update_display(
@@ -1163,8 +1163,8 @@ def main():
 
                 display_dirty = True
 
-            # Maintained play/pause switch.
-            raw_play = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+            # Maintained play/stop switch.
+            raw_play = GPIO.input(PLAY_STOP_PIN) == GPIO.LOW
             play_change = play_debounce.update(raw_play, now)
 
             if play_change is not None:
@@ -1172,34 +1172,31 @@ def main():
                 play_enabled = new_play
 
                 if play_enabled:
-                    log.info("Play/pause switch -> PLAY")
+                    log.info("Play/stop switch -> PLAY")
 
-                    # If the same source is still loaded and merely paused, resume it.
-                    # Otherwise start whatever the physical selectors currently choose.
-                    if (
-                        playing_bank == cur_bank_pos
-                        and playing_station == cur_station_pos
-                        and "[paused]" in mpc("status")
-                    ):
-                        mpc("play")
+                    # Always start the currently selected source fresh.
+                    station = select_station(
+                        banks,
+                        cur_bank_pos,
+                        cur_station_pos,
+                        True,
+                    )
+
+                    if station is not None:
+                        playing_bank = cur_bank_pos
+                        playing_station = cur_station_pos
                     else:
-                        station = select_station(
-                            banks,
-                            cur_bank_pos,
-                            cur_station_pos,
-                            True,
-                        )
-                        if station is not None:
-                            playing_bank = cur_bank_pos
-                            playing_station = cur_station_pos
-                        else:
-                            playing_bank = None
-                            playing_station = None
+                        playing_bank = None
+                        playing_station = None
 
                     watchdog_stop_since = 0.0
+
                 else:
-                    log.info("Play/pause switch -> PAUSE")
-                    mpc("pause")
+                    log.info("Play/stop switch -> STOP")
+                    mpc("stop")
+                    playing_bank = None
+                    playing_station = None
+                    watchdog_stop_since = 0.0
 
                 display_dirty = True
 
@@ -1225,7 +1222,7 @@ def main():
                     cur_bank_pos = read_stable_bcd_at_startup(BANK_PINS, "bank")
                     cur_station_pos = read_stable_bcd_at_startup(STATION_PINS, "station")
                     play_enabled = read_stable_switch_at_startup(
-                        PLAY_PAUSE_PIN, "play/pause"
+                        PLAY_STOP_PIN, "play/stop"
                     )
 
                     bank_debounce = DebouncedValue(cur_bank_pos)
@@ -1294,7 +1291,7 @@ def main():
                     if stn is not None and stn.get("type", "").strip().lower() == "stream":
                         status = mpc("status")
 
-                        if "[playing]" not in status and "[paused]" not in status:
+                        if "[playing]" not in status:
                             if watchdog_stop_since == 0.0:
                                 watchdog_stop_since = now
                                 log.warning(

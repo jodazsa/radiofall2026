@@ -534,31 +534,45 @@ def update_display(
     play_enabled,
     shutdown_requested=False,
 ):
-    """Render current selection, station name, volume, and control state."""
+    """Render the OLED for the current radio state."""
     if display is None:
         return
 
     try:
+        # Rear power-loss standby always gets priority.
+        if shutdown_requested:
+            image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT))
+            draw = ImageDraw.Draw(image)
+
+            draw.text((0, 0), "OK to unplug", font=_default_font, fill=255)
+            draw.text((0, 11), "Flip rear switch", font=_default_font, fill=255)
+            draw.text((0, 22), "to ON to resume", font=_default_font, fill=255)
+
+            display.image(image)
+            display.show()
+            return
+
+        # PLAY/STOP switch in STOP position: make the radio look off.
+        if not play_enabled:
+            display.fill(0)
+            display.show()
+            return
+
+        # Normal PLAY display.
         image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT))
         draw = ImageDraw.Draw(image)
-        font = _default_font
 
-        if shutdown_requested:
-            line1 = "OK to unplug"
-            line2 = "Flip rear switch"
-            line3 = "to ON to resume"
-        else:
-            state_text = "PLAY" if play_enabled else "STOP"
-            line1 = f"B{bank_id} S{station_id}  {state_text}"
-            line2 = station_name[:21] if station_name else "---"
-            line3 = f"Vol: {volume}%"
+        line1 = f"B{bank_id} S{station_id}  PLAY"
+        line2 = station_name[:21] if station_name else "---"
+        line3 = f"Vol: {volume}%"
 
-        draw.text((0, 0), line1[:21], font=font, fill=255)
-        draw.text((0, 11), line2[:21], font=font, fill=255)
-        draw.text((0, 22), line3[:21], font=font, fill=255)
+        draw.text((0, 0), line1[:21], font=_default_font, fill=255)
+        draw.text((0, 11), line2[:21], font=_default_font, fill=255)
+        draw.text((0, 22), line3[:21], font=_default_font, fill=255)
 
         display.image(image)
         display.show()
+
     except Exception as e:
         log.warning("Display update failed: %s", e)
 

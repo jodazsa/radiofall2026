@@ -529,6 +529,7 @@ def update_display(
     display,
     bank_id,
     station_id,
+    bank_name,
     station_name,
     volume,
     play_enabled,
@@ -562,7 +563,7 @@ def update_display(
         image = Image.new("1", (OLED_WIDTH, OLED_HEIGHT))
         draw = ImageDraw.Draw(image)
 
-        line1 = f"B{bank_id} S{station_id}  PLAY"
+        line1 = f"Bank: {bank_name}"
         line2 = station_name[:21] if station_name else "---"
         line3 = f"Vol: {volume}%"
 
@@ -896,6 +897,13 @@ def select_station(banks, bank_id, station_id, play_enabled):
     return station
 
 
+def selected_bank_name(banks, bank_id):
+    bank = banks.get(bank_id)
+    if not isinstance(bank, dict):
+        return "---"
+    return bank.get("name", f"Bank {bank_id}")
+
+
 def selected_station_name(banks, bank_id, station_id):
     _bank, station = get_station(banks, bank_id, station_id)
     if station is None:
@@ -1039,6 +1047,7 @@ def main():
         display,
         cur_bank_pos,
         cur_station_pos,
+        selected_bank_name(banks, cur_bank_pos),
         selected_station_name(banks, cur_bank_pos, cur_station_pos),
         volume,
         play_enabled,
@@ -1278,6 +1287,7 @@ def main():
                         display,
                         cur_bank_pos,
                         cur_station_pos,
+                        selected_bank_name(banks, cur_bank_pos),
                         selected_station_name(banks, cur_bank_pos, cur_station_pos),
                         volume,
                         play_enabled,

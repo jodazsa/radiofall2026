@@ -1339,6 +1339,7 @@ def main():
                     display,
                     cur_bank_pos,
                     cur_station_pos,
+                    selected_bank_name(banks, cur_bank_pos),
                     selected_station_name(banks, cur_bank_pos, cur_station_pos),
                     volume,
                     play_enabled,

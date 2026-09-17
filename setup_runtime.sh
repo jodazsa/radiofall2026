@@ -42,7 +42,7 @@ echo "2. Configuring GPIO interfaces..."
 # OLED uses I2C.
 sudo raspi-config nonint do_i2c 0
 
-# GPIO10/GPIO9 are used by the maintained switches.
+# SPI0 GPIOs 7-11 are used by radio controls.
 sudo raspi-config nonint do_spi 1
 
 # GPIO14/GPIO15 are used by the volume selector.

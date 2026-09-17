@@ -15,35 +15,29 @@ import RPi.GPIO as GPIO
 # The bit order below was verified on the actual switches so physical
 # positions decode as 0,1,2,3,4,5,6,7,8,9.
 
-# Volume BCD: physical 7(V1), 8(V2), 10(V4), 11(V8)
 VOLUME_PINS = {
-    "bit0": 17,  # physical 11
-    "bit1": 15,  # physical 10 (RXD)
-    "bit2": 14,  # physical 8  (TXD)
+    "bit0": 7,   # physical 26
+    "bit1": 12,  # physical 32
+    "bit2": 13,  # physical 33
+    "bit3": 6,   # physical 31
+}
+
+BANK_PINS = {
+    "bit0": 5,   # physical 29
+    "bit1": 11,  # physical 23
+    "bit2": 9,   # physical 21
+    "bit3": 10,  # physical 19
+}
+
+STATION_PINS = {
+    "bit0": 22,  # physical 15
+    "bit1": 27,  # physical 13
+    "bit2": 17,  # physical 11
     "bit3": 4,   # physical 7
 }
 
-# Bank BCD: physical 13(B1), 15(B2), 16(B4), 18(B8)
-BANK_PINS = {
-    "bit0": 24,  # physical 18
-    "bit1": 23,  # physical 16
-    "bit2": 22,  # physical 15
-    "bit3": 27,  # physical 13
-}
-
-# Station BCD: physical 29(S1), 31(S2), 32(S4), 33(S8)
-STATION_PINS = {
-    "bit0": 13,  # physical 33
-    "bit1": 12,  # physical 32
-    "bit2": 6,   # physical 31
-    "bit3": 5,   # physical 29
-}
-
-PLAY_PAUSE_PIN = 10  # SW1, physical 19 (MOSI)
-SHUTDOWN_PIN = 9     # SW2, physical 21 (MISO)
-
-# Physical 22(GPIO25), 23(GPIO11/SCLK), 24(GPIO8/CE0), and 26(GPIO7/CE1)
-# are terminated in the harness and intentionally not claimed here.
+PLAY_STOP_PIN = 8  # physical 24
+SHUTDOWN_PIN = 25   # physical 22
 
 DEBOUNCE_TIME = 0.040
 POLL_INTERVAL = 0.01
@@ -126,7 +120,7 @@ def setup_gpio():
     for pin in VOLUME_PINS.values():
         GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-    GPIO.setup(PLAY_PAUSE_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(PLAY_STOP_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     GPIO.setup(SHUTDOWN_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 
@@ -147,7 +141,7 @@ def main():
         bank = wait_for_valid_bcd("bank", BANK_PINS)
         station = wait_for_valid_bcd("station", STATION_PINS)
         volume = wait_for_valid_bcd("volume", VOLUME_PINS)
-        play = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+        play = GPIO.input(PLAY_STOP_PIN) == GPIO.LOW
         shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
 
         bank_debounce = DebouncedValue(bank)
@@ -160,7 +154,7 @@ def main():
         print(
             "INITIAL "
             f"bank={bank} station={station} volume={volume} "
-            f"play_pause={'CLOSED' if play else 'OPEN'} "
+            f"play_stop={'CLOSED' if play else 'OPEN'} "
             f"shutdown={'CLOSED' if shutdown else 'OPEN'}"
         )
 
@@ -189,11 +183,11 @@ def main():
                     action = "JUMP - REFERENCE ONLY"
                 print(f"VOLUME   {old} -> {new}  {action}")
 
-            raw_play = GPIO.input(PLAY_PAUSE_PIN) == GPIO.LOW
+            raw_play = GPIO.input(PLAY_STOP_PIN) == GPIO.LOW
             change = play_debounce.update(raw_play, now)
             if change is not None:
                 _old, new = change
-                print(f"PLAY     {'CLOSED / PLAY' if new else 'OPEN / PAUSE'}")
+                print(f"PLAY     {'CLOSED / PLAY' if new else 'OPEN / STOP'}")
 
             raw_shutdown = GPIO.input(SHUTDOWN_PIN) == GPIO.LOW
             change = shutdown_debounce.update(raw_shutdown, now)

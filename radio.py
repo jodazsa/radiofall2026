@@ -54,40 +54,36 @@ STATE_BACKUP_PATH = Path("/home/pi/state.backup.json")
 # -----------------------------------------------------------------------------
 
 # IMPORTANT: these are BCM GPIO numbers. Comments show physical header pins.
-# The FR01 switches were verified on hardware to decode correctly only with the
-# bit significance reversed relative to the harness labels, so these mappings
-# are intentionally reversed.
+# Each BCD rotary is listed in 1, 2, 4, 8 bit order.
 
-# Volume BCD: physical 7(V1), 8(V2), 10(V4), 11(V8)
+# Volume BCD: physical 26(V1), 32(V2), 33(V4), 31(V8)
 VOLUME_PINS = {
-    "bit0": 17,  # physical 11
-    "bit1": 15,  # physical 10 (RXD)
-    "bit2": 14,  # physical 8  (TXD)
+    "bit0": 7,   # physical 26
+    "bit1": 12,  # physical 32
+    "bit2": 13,  # physical 33
+    "bit3": 6,   # physical 31
+}
+
+# Bank BCD: physical 29(B1), 23(B2), 21(B4), 19(B8)
+BANK_PINS = {
+    "bit0": 5,   # physical 29
+    "bit1": 11,  # physical 23 (SPI0 SCLK)
+    "bit2": 9,   # physical 21 (SPI0 MISO)
+    "bit3": 10,  # physical 19 (SPI0 MOSI)
+}
+
+# Station BCD: physical 15(S1), 13(S2), 11(S4), 7(S8)
+STATION_PINS = {
+    "bit0": 22,  # physical 15
+    "bit1": 27,  # physical 13
+    "bit2": 17,  # physical 11
     "bit3": 4,   # physical 7
 }
 
-# Bank BCD: physical 13(B1), 15(B2), 16(B4), 18(B8)
-BANK_PINS = {
-    "bit0": 24,  # physical 18
-    "bit1": 23,  # physical 16
-    "bit2": 22,  # physical 15
-    "bit3": 27,  # physical 13
-}
-
-# Station BCD: physical 29(S1), 31(S2), 32(S4), 33(S8)
-STATION_PINS = {
-    "bit0": 13,  # physical 33
-    "bit1": 12,  # physical 32
-    "bit2": 6,   # physical 31
-    "bit3": 5,   # physical 29
-}
-
 # Maintained SPST switches
-PLAY_STOP_PIN = 10  # SW1, physical 19 (MOSI)
-SHUTDOWN_PIN = 9     # SW2, physical 21 (MISO)
+PLAY_STOP_PIN = 8   # physical 24 (SPI0 CE0)
+SHUTDOWN_PIN = 25   # physical 22
 
-# Physical 22(GPIO25), 23(GPIO11/SCLK), 24(GPIO8/CE0), and 26(GPIO7/CE1)
-# are terminated in the harness and intentionally not claimed by this program.
 
 # OLED display: Adafruit 4440, SSD1306 128x32, I2C address 0x3C
 OLED_I2C_ADDR = 0x3C

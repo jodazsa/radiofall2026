@@ -74,6 +74,7 @@ sudo install \
     /etc/systemd/system/radio-stations-sync.timer
 
 sudo systemctl daemon-reload
+sudo systemctl enable radio-stations-sync.timer
 
 echo
 echo "Restarting radio..."

@@ -118,6 +118,13 @@ sudo install \
     /usr/local/bin/radio.py
 
 sudo install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/sync_stations.py" \
+    /usr/local/bin/sync_stations.py
+
+sudo install \
     -o pi \
     -g pi \
     -m 0644 \
@@ -133,6 +140,20 @@ sudo install \
     -m 0644 \
     "$SCRIPT_DIR/radio.service" \
     /etc/systemd/system/radio.service
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio-stations-sync.service" \
+    /etc/systemd/system/radio-stations-sync.service
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio-stations-sync.timer" \
+    /etc/systemd/system/radio-stations-sync.timer
 
 echo
 echo "9. Configuring volatile journal..."
@@ -152,6 +173,7 @@ echo "10. Enabling services..."
 sudo systemctl daemon-reload
 sudo systemctl enable mpd.service
 sudo systemctl enable radio.service
+sudo systemctl enable radio-stations-sync.timer
 
 echo
 echo "======================================"

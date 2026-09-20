@@ -60,7 +60,18 @@ sudo install \
     -m 0644 \
     "$SCRIPT_DIR/radio-stations-sync.service" \
     /etc/systemd/system/radio-stations-sync.service
-    
+
+
+
+echo
+echo "Installing station sync timer..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio-stations-sync.timer" \
+    /etc/systemd/system/radio-stations-sync.timer
 
 sudo systemctl daemon-reload
 

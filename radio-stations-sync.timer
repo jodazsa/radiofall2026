@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily RadioFall2026 station update
+
+[Timer]
+OnBootSec=5min
+OnCalendar=*-*-* 04:00:00
+Unit=radio-stations-sync.service
+
+[Install]
+WantedBy=timers.target

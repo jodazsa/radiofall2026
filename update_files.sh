@@ -31,6 +31,16 @@ sudo install \
 echo
 echo "Installing radio.service..."
 
+echo
+echo "Installing station sync updater..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/sync_stations.py" \
+    /usr/local/bin/sync_stations.py
+
 sudo install \
     -o root \
     -g root \
@@ -40,6 +50,17 @@ sudo install \
 
 echo
 echo "Reloading systemd..."
+
+echo
+echo "Installing station sync service..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio-stations-sync.service" \
+    /etc/systemd/system/radio-stations-sync.service
+    
 
 sudo systemctl daemon-reload
 

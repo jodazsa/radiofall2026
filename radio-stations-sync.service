@@ -1,0 +1,12 @@
+[Unit]
+Description=Update RadioFall2026 stations from GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+Group=pi
+ExecStart=/opt/radio-venv/bin/python3 /usr/local/bin/sync_stations.py
+
+NoNewPrivileges=yes

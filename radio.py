@@ -30,8 +30,6 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import board
@@ -115,6 +113,7 @@ WATCHDOG_NOTIFY_INTERVAL = 10.0
 DISPLAY_UPDATE_INTERVAL = 0.5
 PODCAST_FETCH_TIMEOUT = 8
 PODCAST_MAX_BYTES = 2 * 1024 * 1024
+PODCAST_READ_CHUNK = 64 * 1024
 
 # -----------------------------------------------------------------------------
 # Logging and process shutdown
@@ -672,7 +671,7 @@ def wait_for_power_safe_release(display, volume, boot_wait=False):
 
 
 def resolve_latest_podcast_episode(feed_url):
-    """Return the newest playable podcast enclosure URL, or None on failure."""
+    """Return the first playable podcast enclosure URL, or None on failure."""
     log.info("Fetching podcast feed: %s", feed_url)
 
     request = urllib.request.Request(
@@ -680,95 +679,85 @@ def resolve_latest_podcast_episode(feed_url):
         headers={"User-Agent": "RadioFall2026/1.0"},
     )
 
+    total_bytes = 0
+
     try:
         with urllib.request.urlopen(
             request,
             timeout=PODCAST_FETCH_TIMEOUT,
         ) as response:
-            data = response.read(PODCAST_MAX_BYTES + 1)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        log.error("Podcast feed request failed: %s", e)
-        return None
+            parser = ET.XMLPullParser(events=("end",))
 
-    if not data:
-        log.error("Podcast feed was empty")
-        return None
+            while True:
+                chunk = response.read(PODCAST_READ_CHUNK)
 
-    if len(data) > PODCAST_MAX_BYTES:
-        log.error("Podcast feed was unexpectedly large")
-        return None
+                if not chunk:
+                    break
 
-    try:
-        root = ET.fromstring(data)
+                total_bytes += len(chunk)
+
+                if total_bytes > PODCAST_MAX_BYTES:
+                    log.error(
+                        "No playable podcast episode found within "
+                        "the first %d bytes",
+                        PODCAST_MAX_BYTES,
+                    )
+                    return None
+
+                parser.feed(chunk)
+
+                for _event, item in parser.read_events():
+                    if item.tag != "item":
+                        continue
+
+                    enclosure = item.find("enclosure")
+
+                    if enclosure is None:
+                        item.clear()
+                        continue
+
+                    audio_url = (enclosure.get("url") or "").strip()
+
+                    if not audio_url.startswith(
+                        ("http://", "https://")
+                    ):
+                        item.clear()
+                        continue
+
+                    title = (
+                        item.findtext("title")
+                        or "Untitled episode"
+                    ).strip()
+
+                    log.info(
+                        "Latest podcast episode: %s",
+                        title,
+                    )
+
+                    return audio_url
+
     except ET.ParseError as e:
-        log.error("Podcast feed contains invalid XML: %s", e)
-        return None
-
-    items = root.findall("./channel/item")
-
-    if not items:
-        log.error("Podcast feed contains no RSS items")
-        return None
-
-    playable = []
-
-    for index, item in enumerate(items):
-        enclosure = item.find("enclosure")
-        if enclosure is None:
-            continue
-
-        audio_url = (enclosure.get("url") or "").strip()
-
-        if not audio_url.startswith(("http://", "https://")):
-            continue
-
-        title = (item.findtext("title") or "Untitled episode").strip()
-        pub_text = (item.findtext("pubDate") or "").strip()
-
-        published = None
-
-        if pub_text:
-            try:
-                published = parsedate_to_datetime(pub_text)
-
-                if published.tzinfo is None:
-                    published = published.replace(tzinfo=timezone.utc)
-            except (TypeError, ValueError, OverflowError):
-                published = None
-
-        playable.append(
-            {
-                "index": index,
-                "title": title,
-                "published": published,
-                "audio_url": audio_url,
-            }
+        log.error(
+            "Podcast feed contains invalid XML: %s",
+            e,
         )
-
-    if not playable:
-        log.error("Podcast feed contains no playable enclosures")
         return None
 
-    dated = [
-        episode
-        for episode in playable
-        if episode["published"] is not None
-    ]
-
-    if dated:
-        episode = max(
-            dated,
-            key=lambda item: item["published"].timestamp(),
+    except (
+        urllib.error.URLError,
+        TimeoutError,
+        OSError,
+    ) as e:
+        log.error(
+            "Podcast feed request failed: %s",
+            e,
         )
-    else:
-        episode = playable[0]
+        return None
 
-    log.info("Latest podcast episode: %s", episode["title"])
-
-    if episode["published"] is not None:
-        log.info("Published: %s", episode["published"].isoformat())
-
-    return episode["audio_url"]
+    log.error(
+        "Podcast feed contains no playable enclosures"
+    )
+    return None
 
 def play_stream(url):
     log.info("Playing stream: %s", url)

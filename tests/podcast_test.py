@@ -9,10 +9,12 @@ import sync_stations
 
 
 class FakeResponse:
-    """Minimal context-manager response for mocked urlopen()."""
+    """Minimal streaming response for mocked urlopen()."""
 
     def __init__(self, data):
         self.data = data
+        self.offset = 0
+        self.bytes_read = 0
 
     def __enter__(self):
         return self
@@ -20,8 +22,23 @@ class FakeResponse:
     def __exit__(self, exc_type, exc_value, traceback):
         return False
 
-    def read(self, _size=-1):
-        return self.data
+    def read(self, size=-1):
+        if self.offset >= len(self.data):
+            return b""
+
+        if size is None or size < 0:
+            end = len(self.data)
+        else:
+            end = min(
+                self.offset + size,
+                len(self.data),
+            )
+
+        chunk = self.data[self.offset:end]
+        self.offset = end
+        self.bytes_read += len(chunk)
+
+        return chunk
 
 
 def rss_bytes(items):
@@ -39,91 +56,20 @@ def rss_bytes(items):
 
 class PodcastResolverTests(unittest.TestCase):
 
-    def test_newest_pubdate_wins_even_when_feed_order_differs(self):
+    def test_first_playable_item_wins(self):
         data = rss_bytes(
             """
             <item>
-              <title>Older First</title>
+              <title>First In Feed</title>
               <pubDate>Mon, 01 Sep 2026 10:00:00 GMT</pubDate>
-              <enclosure
-                  url="https://example.com/older.mp3"
-                  type="audio/mpeg" />
-            </item>
-
-            <item>
-              <title>Newest Second</title>
-              <pubDate>Wed, 03 Sep 2026 10:00:00 GMT</pubDate>
-              <enclosure
-                  url="https://example.com/newest.mp3"
-                  type="audio/mpeg" />
-            </item>
-
-            <item>
-              <title>Middle Third</title>
-              <pubDate>Tue, 02 Sep 2026 10:00:00 GMT</pubDate>
-              <enclosure
-                  url="https://example.com/middle.mp3"
-                  type="audio/mpeg" />
-            </item>
-            """
-        )
-
-        with patch(
-            "radio.urllib.request.urlopen",
-            return_value=FakeResponse(data),
-        ):
-            result = radio.resolve_latest_podcast_episode(
-                "https://example.com/feed.xml"
-            )
-
-        self.assertEqual(
-            result,
-            "https://example.com/newest.mp3",
-        )
-
-    def test_newest_unplayable_item_is_skipped(self):
-        data = rss_bytes(
-            """
-            <item>
-              <title>Newest But Broken</title>
-              <pubDate>Wed, 03 Sep 2026 10:00:00 GMT</pubDate>
-            </item>
-
-            <item>
-              <title>Newest Playable</title>
-              <pubDate>Tue, 02 Sep 2026 10:00:00 GMT</pubDate>
-              <enclosure
-                  url="https://example.com/playable.mp3"
-                  type="audio/mpeg" />
-            </item>
-            """
-        )
-
-        with patch(
-            "radio.urllib.request.urlopen",
-            return_value=FakeResponse(data),
-        ):
-            result = radio.resolve_latest_podcast_episode(
-                "https://example.com/feed.xml"
-            )
-
-        self.assertEqual(
-            result,
-            "https://example.com/playable.mp3",
-        )
-
-    def test_missing_dates_fall_back_to_first_playable_item(self):
-        data = rss_bytes(
-            """
-            <item>
-              <title>First Playable</title>
               <enclosure
                   url="https://example.com/first.mp3"
                   type="audio/mpeg" />
             </item>
 
             <item>
-              <title>Second Playable</title>
+              <title>Newer Date But Second</title>
+              <pubDate>Wed, 03 Sep 2026 10:00:00 GMT</pubDate>
               <enclosure
                   url="https://example.com/second.mp3"
                   type="audio/mpeg" />
@@ -144,12 +90,115 @@ class PodcastResolverTests(unittest.TestCase):
             "https://example.com/first.mp3",
         )
 
+    def test_unplayable_first_item_is_skipped(self):
+        data = rss_bytes(
+            """
+            <item>
+              <title>Broken First Item</title>
+              <enclosure
+                  url="file:///tmp/not-playable.mp3"
+                  type="audio/mpeg" />
+            </item>
+
+            <item>
+              <title>Playable Second Item</title>
+              <enclosure
+                  url="https://example.com/playable.mp3"
+                  type="audio/mpeg" />
+            </item>
+            """
+        )
+
+        with patch(
+            "radio.urllib.request.urlopen",
+            return_value=FakeResponse(data),
+        ):
+            result = radio.resolve_latest_podcast_episode(
+                "https://example.com/feed.xml"
+            )
+
+        self.assertEqual(
+            result,
+            "https://example.com/playable.mp3",
+        )
+
+    def test_pubdate_is_not_required(self):
+        data = rss_bytes(
+            """
+            <item>
+              <title>No Date Needed</title>
+              <enclosure
+                  url="https://example.com/current.mp3"
+                  type="audio/mpeg" />
+            </item>
+            """
+        )
+
+        with patch(
+            "radio.urllib.request.urlopen",
+            return_value=FakeResponse(data),
+        ):
+            result = radio.resolve_latest_podcast_episode(
+                "https://example.com/feed.xml"
+            )
+
+        self.assertEqual(
+            result,
+            "https://example.com/current.mp3",
+        )
+
+    def test_resolver_stops_reading_after_first_playable_item(self):
+        filler = "x" * (radio.PODCAST_READ_CHUNK * 3)
+
+        data = rss_bytes(
+            f"""
+            <item>
+              <title>First Episode</title>
+              <enclosure
+                  url="https://example.com/first.mp3"
+                  type="audio/mpeg" />
+            </item>
+
+            <item>
+              <title>Large Historical Item</title>
+              <description>{filler}</description>
+              <enclosure
+                  url="https://example.com/old.mp3"
+                  type="audio/mpeg" />
+            </item>
+            """
+        )
+
+        response = FakeResponse(data)
+
+        with patch(
+            "radio.urllib.request.urlopen",
+            return_value=response,
+        ):
+            result = radio.resolve_latest_podcast_episode(
+                "https://example.com/feed.xml"
+            )
+
+        self.assertEqual(
+            result,
+            "https://example.com/first.mp3",
+        )
+
+        self.assertLess(
+            response.bytes_read,
+            len(data),
+        )
+
+        self.assertLessEqual(
+            response.bytes_read,
+            radio.PODCAST_READ_CHUNK,
+        )
+
     def test_invalid_enclosure_url_is_rejected(self):
         data = rss_bytes(
             """
             <item>
               <title>Bad URL</title>
-              <pubDate>Wed, 03 Sep 2026 10:00:00 GMT</pubDate>
               <enclosure
                   url="file:///tmp/not-a-podcast.mp3"
                   type="audio/mpeg" />

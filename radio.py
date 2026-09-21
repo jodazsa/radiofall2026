@@ -735,7 +735,7 @@ def resolve_latest_podcast_episode(feed_url):
                     )
 
                     return audio_url
-    parser.close()
+        parser.close()
     except ET.ParseError as e:
         log.error(
             "Podcast feed contains invalid XML: %s",

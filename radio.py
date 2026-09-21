@@ -27,6 +27,11 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import board
@@ -108,7 +113,8 @@ STATE_SAVE_INTERVAL = 5.0
 CONFIG_CHECK_INTERVAL = 30.0
 WATCHDOG_NOTIFY_INTERVAL = 10.0
 DISPLAY_UPDATE_INTERVAL = 0.5
-
+PODCAST_FETCH_TIMEOUT = 8
+PODCAST_MAX_BYTES = 2 * 1024 * 1024
 
 # -----------------------------------------------------------------------------
 # Logging and process shutdown
@@ -665,6 +671,105 @@ def wait_for_power_safe_release(display, volume, boot_wait=False):
 # -----------------------------------------------------------------------------
 
 
+def resolve_latest_podcast_episode(feed_url):
+    """Return the newest playable podcast enclosure URL, or None on failure."""
+    log.info("Fetching podcast feed: %s", feed_url)
+
+    request = urllib.request.Request(
+        feed_url,
+        headers={"User-Agent": "RadioFall2026/1.0"},
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=PODCAST_FETCH_TIMEOUT,
+        ) as response:
+            data = response.read(PODCAST_MAX_BYTES + 1)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        log.error("Podcast feed request failed: %s", e)
+        return None
+
+    if not data:
+        log.error("Podcast feed was empty")
+        return None
+
+    if len(data) > PODCAST_MAX_BYTES:
+        log.error("Podcast feed was unexpectedly large")
+        return None
+
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as e:
+        log.error("Podcast feed contains invalid XML: %s", e)
+        return None
+
+    items = root.findall("./channel/item")
+
+    if not items:
+        log.error("Podcast feed contains no RSS items")
+        return None
+
+    playable = []
+
+    for index, item in enumerate(items):
+        enclosure = item.find("enclosure")
+        if enclosure is None:
+            continue
+
+        audio_url = (enclosure.get("url") or "").strip()
+
+        if not audio_url.startswith(("http://", "https://")):
+            continue
+
+        title = (item.findtext("title") or "Untitled episode").strip()
+        pub_text = (item.findtext("pubDate") or "").strip()
+
+        published = None
+
+        if pub_text:
+            try:
+                published = parsedate_to_datetime(pub_text)
+
+                if published.tzinfo is None:
+                    published = published.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError, OverflowError):
+                published = None
+
+        playable.append(
+            {
+                "index": index,
+                "title": title,
+                "published": published,
+                "audio_url": audio_url,
+            }
+        )
+
+    if not playable:
+        log.error("Podcast feed contains no playable enclosures")
+        return None
+
+    dated = [
+        episode
+        for episode in playable
+        if episode["published"] is not None
+    ]
+
+    if dated:
+        episode = max(
+            dated,
+            key=lambda item: item["published"].timestamp(),
+        )
+    else:
+        episode = playable[0]
+
+    log.info("Latest podcast episode: %s", episode["title"])
+
+    if episode["published"] is not None:
+        log.info("Published: %s", episode["published"].isoformat())
+
+    return episode["audio_url"]
+
 def play_stream(url):
     log.info("Playing stream: %s", url)
     mpc("clear")
@@ -673,6 +778,26 @@ def play_stream(url):
     mpc("random", "off")
     mpc("add", url)
     mpc("play")
+
+
+def play_podcast(feed_url):
+    """Resolve and play the newest podcast episode from the beginning."""
+    mpc("stop")
+
+    audio_url = resolve_latest_podcast_episode(feed_url)
+
+    if not audio_url:
+        return False
+
+    log.info("Starting podcast audio")
+    play_stream(audio_url)
+
+    if not _wait_for_playing():
+        log.error("Podcast audio did not begin playing")
+        mpc("stop")
+        return False
+
+    return True
 
 
 def _resolve_path(raw: str) -> Path:
@@ -849,6 +974,15 @@ def play_station(station):
         play_stream(url)
         return True
 
+    if stype == "podcast":
+        url = station.get("url", "").strip()
+
+        if not url:
+            log.error("Podcast station '%s' has no url", name)
+            return False
+
+        return play_podcast(url)
+    
     if stype == "file":
         path = station.get("path", "").strip()
         if not path:

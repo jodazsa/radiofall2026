@@ -44,6 +44,7 @@ MAX_DOWNLOAD_BYTES = 1024 * 1024
 
 VALID_TYPES = {
     "stream",
+    "podcast",
     "file",
     "file_once",
     "single_file",
@@ -150,7 +151,7 @@ def validate_station(bank_id, station_id, station):
             f"unknown type {station_type!r}"
         )
 
-    if station_type == "stream":
+    if station_type in ("stream", "podcast"):
         url = station.get("url")
 
         if not isinstance(url, str) or not url.strip():
@@ -158,7 +159,14 @@ def validate_station(bank_id, station_id, station):
                 f"Bank {bank_id} station {station_id} "
                 "is a stream but has no URL"
             )
+        
+        url = url.strip()
 
+        if not url.startswith(("http://", "https://")):
+            raise ValueError(
+                f"Bank {bank_id} station {station_id} "
+                f"has invalid {station_type} URL"
+            )
         return
 
     raw_path = station.get("path")

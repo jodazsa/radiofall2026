@@ -5,7 +5,7 @@
 #   file    — Single local audio file, loops (requires path, relative to /home/radio/audio/)
 #   dir     — All audio files in a directory (requires path, relative to /home/radio/audio/)
 #   file_once — Single local audio file from start, then stop (requires path)
-#
+#   podcast — Latest episode from an RSS feed (requires url)
 # Banks 0-9, Stations 0-9
 #
 # Example:
@@ -31,7 +31,7 @@
 #  file:  play one audio file, seek to a random position, loop forever
 #  dir:  choose one item randomly from the listed directory.  Play the item from the start, then continue playing items from the directory in order, looping to the beginning of the directory once the end is reached.
 #  file_once: play one audio file from the beginning exactly once, then stop.
-#  
+#  podcast: play the first playable episode listed in the RSS feed from the beginning
 #
 banks:
   0:
@@ -169,12 +169,12 @@ banks:
         url: "https://onair.wfuv.org/onair-aacplus"
         # PLAYS AD FIRST
   3:
-    name: "Around the world 1"
+    name: "Podcasts"
     stations:
       0:
-        name: "La Kalle 96.9"
-        type: stream
-        url: "https://27383.live.streamtheworld.com/LA_KALLE.mp3"
+        name: "The Daily"
+        type: podcast
+        url: "https://feeds.simplecast.com/54nAGcIl"
       1:
         name: "Los 40 Principales Mexico"
         type: stream

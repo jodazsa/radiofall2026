@@ -5,7 +5,7 @@
 #   file    — Single local audio file, loops (requires path, relative to /home/radio/audio/)
 #   dir     — All audio files in a directory (requires path, relative to /home/radio/audio/)
 #   file_once — Single local audio file from start, then stop (requires path)
-#   podcast — Latest episode from an RSS feed (requires url)
+#
 # Banks 0-9, Stations 0-9
 #
 # Example:
@@ -31,7 +31,7 @@
 #  file:  play one audio file, seek to a random position, loop forever
 #  dir:  choose one item randomly from the listed directory.  Play the item from the start, then continue playing items from the directory in order, looping to the beginning of the directory once the end is reached.
 #  file_once: play one audio file from the beginning exactly once, then stop.
-#  podcast: play the first playable episode listed in the RSS feed from the beginning
+#  
 #
 banks:
   0:
@@ -168,49 +168,58 @@ banks:
         type: stream
         url: "https://onair.wfuv.org/onair-aacplus"
         # PLAYS AD FIRST
-  3:
+    3:
     name: "Podcasts"
     stations:
       0:
-        name: "The Daily"
+        name: "NYT: The Daily"
         type: podcast
         url: "https://feeds.simplecast.com/54nAGcIl"
+
       1:
-        name: "Los 40 Principales Mexico"
-        type: stream
-        url: "https://26733.live.streamtheworld.com/LOS40_MEXICO.mp3"
+        name: "Vox: Today, Explained"
+        type: podcast
+        url: "https://feeds.megaphone.fm/VMP5705694065"
+
       2:
-        name: "Alpha Boys School Radio - Jamaica"
-        type: stream
-        url: "https://alphaboys-live.streamguys1.com/alphaboys.aac"
+        name: "Guardian:Today in Focus"
+        type: podcast
+        url: "https://www.theguardian.com/news/series/todayinfocus/podcast.xml"
+
       3:
-        name: "Ashiya - Japan"
-        type: stream
-        url: "https://s3.radio.co/sc8d895604/listen"
+        name: "Economist: The Intelligence"
+        type: podcast
+        url: "https://feeds.acast.com/public/shows/theintelligencepodcast"
+
       4:
-        name: "WREP Live - Tokyo"
-        type: stream
-        url: "https://c13.radioboss.fm:8200/stream"
+        name: "NPR: Up First"
+        type: podcast
+        url: "https://feeds.npr.org/510318/podcast.xml"
+
       5:
-        name: "Radio Eigekai"
-        type: stream
-        url: "http://stream.radiojar.com/66zgtscuc1duv?1768412014"
+        name: "BBC: Global News Podcast"
+        type: podcast
+        url: "https://podcasts.files.bbci.co.uk/p02nq0gn.rss"
+
       6:
-        name: "Red Dirt Radio - Australia"
-        type: stream
-        url: "https://az1.syd2.hostyourservices.au:8010/magic876"
+        name: "The Daily Stoic"
+        type: podcast
+        url: "https://rss.art19.com/the-daily-stoic"
+
       7:
-        name: "Punk Radio Underground Poland"
-        type: stream
-        url: "https://s1.slotex.pl:7604/stream/1/"
+        name: "Webster's Word of the Day"
+        type: podcast
+        url: "https://www.merriam-webster.com/wotd/feed/rss2"
+
       8:
-        name: "fbi Sydney"
-        type: stream
-        url: "https://streamer.fbiradio.com/stream"
+        name: "BirdNote"
+        type: podcast
+        url: "https://feeds.simplecast.com/OB7SrYSf"
+
       9:
-        name: "triple j Australia"
-        type: stream
-        url: "https://streaming.abc-cdn.net.au/audio/hls/triplejnsw.m3u8"
+        name: "WNYC: On the Media"
+        type: podcast
+        url: "https://feeds.simplecast.com/o4jAFXaw"
   4:
     name: "Around the world 2"
     stations:
@@ -477,3 +486,46 @@ banks:
         name: "Alice Cooper"
         type: dir
         path: "shows/AliceCooper"
+  10:
+    name: "Around the world 1"
+    stations:
+      0:
+        name: "La Kalle 96.9"
+        type: stream
+        url: "https://27383.live.streamtheworld.com/LA_KALLE.mp3"
+      1:
+        name: "Los 40 Principales Mexico"
+        type: stream
+        url: "https://26733.live.streamtheworld.com/LOS40_MEXICO.mp3"
+      2:
+        name: "Alpha Boys School Radio - Jamaica"
+        type: stream
+        url: "https://alphaboys-live.streamguys1.com/alphaboys.aac"
+      3:
+        name: "Ashiya - Japan"
+        type: stream
+        url: "https://s3.radio.co/sc8d895604/listen"
+      4:
+        name: "WREP Live - Tokyo"
+        type: stream
+        url: "https://c13.radioboss.fm:8200/stream"
+      5:
+        name: "Radio Eigekai"
+        type: stream
+        url: "http://stream.radiojar.com/66zgtscuc1duv?1768412014"
+      6:
+        name: "Red Dirt Radio - Australia"
+        type: stream
+        url: "https://az1.syd2.hostyourservices.au:8010/magic876"
+      7:
+        name: "Punk Radio Underground Poland"
+        type: stream
+        url: "https://s1.slotex.pl:7604/stream/1/"
+      8:
+        name: "fbi Sydney"
+        type: stream
+        url: "https://streamer.fbiradio.com/stream"
+      9:
+        name: "triple j Australia"
+        type: stream
+        url: "https://streaming.abc-cdn.net.au/audio/hls/triplejnsw.m3u8"

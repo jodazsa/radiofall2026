@@ -49,7 +49,6 @@ the file goes here:
 /home/pi/audio/tracks/Muji BGM 1980-2000.mp3
 ```
 
-That's basically the whole system.
 
 ## Make Sure the Pi Folders Exist
 

@@ -1,10 +1,17 @@
 # stations.yaml — Radio station definitions
 #
 # Station types:
-#   stream  — Internet radio (requires url)
-#   file    — Single local audio file, loops (requires path, relative to /home/radio/audio/)
-#   dir     — All audio files in a directory (requires path, relative to /home/radio/audio/)
-#   file_once — Single local audio file from start, then stop (requires path)
+#   stream     — Internet radio (requires url)
+#   podcast    — First playable RSS episode, played once from the beginning (requires url)
+#   file       — Single local audio file, loops (requires path)
+#   dir        — All audio files in a directory (requires path)
+#   file_once  — Single local audio file from start, then stop (requires path)
+#
+# Podcast behavior:
+#   Feed order is authoritative; the first item with a valid HTTP/HTTPS
+#   audio enclosure is selected. Playback always starts from the beginning.
+#   There is no resume position, repeat, episode download, or local cache.
+#   When the episode reaches its natural end, playback stops.
 #
 # Banks 0-9, Stations 0-9
 #
@@ -28,6 +35,7 @@
 # 
 # Available types:  
 #  stream:  just play the stream
+#  podcast: play the first playable RSS episode from the beginning once, then stop
 #  file:  play one audio file, seek to a random position, loop forever
 #  dir:  choose one item randomly from the listed directory.  Play the item from the start, then continue playing items from the directory in order, looping to the beginning of the directory once the end is reached.
 #  file_once: play one audio file from the beginning exactly once, then stop.

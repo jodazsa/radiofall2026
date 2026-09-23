@@ -127,7 +127,7 @@ logging.basicConfig(
 log = logging.getLogger("radio")
 
 _shutdown = False
-
+_podcast_resume_states = {}
 
 def _handle_signal(signum, frame):
     """Handle SIGTERM/SIGINT for graceful application shutdown."""
@@ -205,10 +205,11 @@ def _atomic_write_json(path: Path, payload: dict):
 
 
 def save_state(volume):
-    """Persist software volume. Physical control positions are not persisted."""
+    """Persist software volume and paused podcast resume states."""
     state = {
         "volume": int(volume),
         "timestamp": int(time.time()),
+        "podcasts": _podcast_resume_states,
     }
 
     try:
@@ -217,21 +218,71 @@ def save_state(volume):
     except Exception as e:
         log.warning("Failed to save state: %s", e)
 
+def _validate_podcast_states(data):
+    """Return normalized valid podcast resume states."""
+    if not isinstance(data, dict):
+        return {}
 
+    valid = {}
+
+    for feed_url, entry in data.items():
+        if not isinstance(feed_url, str):
+            continue
+
+        feed_url = feed_url.strip()
+
+        if not feed_url.startswith(("http://", "https://")):
+            continue
+
+        if not isinstance(entry, dict):
+            continue
+
+        episode_id = entry.get("episode_id")
+        position = entry.get("position")
+        title = entry.get("title", "")
+
+        if not isinstance(episode_id, str) or not episode_id.strip():
+            continue
+
+        if (
+            isinstance(position, bool)
+            or not isinstance(position, (int, float))
+            or position < 0
+        ):
+            continue
+
+        if not isinstance(title, str):
+            title = ""
+
+        valid[feed_url] = {
+            "episode_id": episode_id.strip(),
+            "position": int(position),
+            "title": title.strip(),
+        }
+
+    return valid
+    
 def _validate_state(data):
     """Return normalized persisted state, or None when invalid."""
     if not isinstance(data, dict):
         return None
 
     volume = data.get("volume")
+
     if not isinstance(volume, int):
         return None
+
     if not (VOLUME_MIN <= volume <= VOLUME_MAX):
         return None
+
+    podcasts = _validate_podcast_states(
+        data.get("podcasts", {})
+    )
 
     return {
         "volume": volume,
         "timestamp": data.get("timestamp"),
+        "podcasts": podcasts,
     }
 
 
@@ -251,6 +302,7 @@ def load_state():
                     "Restored state from %s: volume=%d",
                     path.name,
                     validated["volume"],
+                    len(validated["podcasts"]),
                 )
                 return validated
 
@@ -1058,6 +1110,8 @@ def selected_station_name(banks, bank_id, station_id):
 
 
 def main():
+    global _podcast_resume_states
+    
     log.info("=" * 40)
     log.info("Radio controller starting")
     log.info("=" * 40)
@@ -1111,6 +1165,7 @@ def main():
     volume = DEFAULT_VOLUME
     if saved_state is not None:
         volume = saved_state["volume"]
+        _podcast_resume_states = saved_state["podcasts"]
 
     bank_debounce = DebouncedValue(cur_bank_pos)
     station_debounce = DebouncedValue(cur_station_pos)

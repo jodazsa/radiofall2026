@@ -671,7 +671,7 @@ def wait_for_power_safe_release(display, volume, boot_wait=False):
 
 
 def resolve_latest_podcast_episode(feed_url):
-    """Return the first playable podcast enclosure URL, or None on failure."""
+    """Return metadata for the first playable podcast episode, or None."""
     log.info("Fetching podcast feed: %s", feed_url)
 
     request = urllib.request.Request(
@@ -723,18 +723,40 @@ def resolve_latest_podcast_episode(feed_url):
                     ):
                         item.clear()
                         continue
-
+                        
                     title = (
                         item.findtext("title")
                         or "Untitled episode"
                     ).strip()
+
+                    guid = (
+                        item.findtext("guid")
+                        or ""
+                    ).strip()
+
+                    pub_date = (
+                        item.findtext("pubDate")
+                        or ""
+                    ).strip()
+
+                    if guid:
+                        episode_id = guid
+                    elif pub_date:
+                        episode_id = f"{title}|{pub_date}"
+                    else:
+                        episode_id = audio_url
 
                     log.info(
                         "Latest podcast episode: %s",
                         title,
                     )
 
-                    return audio_url
+                    return {
+                        "episode_id": episode_id,
+                        "title": title,
+                        "audio_url": audio_url,
+                    }
+                    
         parser.close()
     except ET.ParseError as e:
         log.error(

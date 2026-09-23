@@ -457,9 +457,37 @@ class PodcastStateValidationTests(unittest.TestCase):
             radio._podcast_resume_states = original
             
 
+
 class PodcastPlaybackTests(unittest.TestCase):
 
-    def test_play_podcast_stops_old_audio_then_starts_episode(self):
+    def setUp(self):
+        self.original_resume_states = (
+            radio._podcast_resume_states
+        )
+        self.original_active_podcast = (
+            radio._active_podcast
+        )
+
+        radio._podcast_resume_states = {}
+        radio._active_podcast = None
+
+    def tearDown(self):
+        radio._podcast_resume_states = (
+            self.original_resume_states
+        )
+        radio._active_podcast = (
+            self.original_active_podcast
+        )
+
+    def test_new_podcast_episode_starts_from_beginning(self):
+        feed_url = "https://example.com/feed.xml"
+
+        episode = {
+            "episode_id": "episode-1",
+            "title": "Episode One",
+            "audio_url": "https://example.com/episode-1.mp3",
+        }
+
         calls = []
 
         def fake_mpc(*args):
@@ -469,7 +497,7 @@ class PodcastPlaybackTests(unittest.TestCase):
         with (
             patch(
                 "radio.resolve_latest_podcast_episode",
-                return_value="https://example.com/latest.mp3",
+                return_value=episode,
             ),
             patch(
                 "radio.mpc",
@@ -482,18 +510,320 @@ class PodcastPlaybackTests(unittest.TestCase):
                 "radio._wait_for_playing",
                 return_value=True,
             ),
+            patch(
+                "radio.save_state",
+            ) as save_state,
         ):
             result = radio.play_podcast(
-                "https://example.com/feed.xml"
+                feed_url,
+                35,
             )
 
         self.assertTrue(result)
-        self.assertGreaterEqual(len(calls), 1)
-        self.assertEqual(calls[0], ("stop",))
+
+        self.assertEqual(
+            calls[0],
+            ("stop",),
+        )
 
         play_stream.assert_called_once_with(
-            "https://example.com/latest.mp3"
+            "https://example.com/episode-1.mp3"
         )
+
+        self.assertNotIn(
+            ("seek", "0"),
+            calls,
+        )
+
+        self.assertEqual(
+            radio._active_podcast,
+            {
+                "feed_url": feed_url,
+                "episode_id": "episode-1",
+                "title": "Episode One",
+                "audio_url": (
+                    "https://example.com/episode-1.mp3"
+                ),
+            },
+        )
+
+        self.assertEqual(
+            radio._podcast_resume_states[feed_url],
+            {
+                "episode_id": "episode-1",
+                "position": 0,
+                "title": "Episode One",
+            },
+        )
+
+        save_state.assert_called_once_with(35)
+
+    def test_same_episode_resumes_saved_position(self):
+        feed_url = "https://example.com/feed.xml"
+
+        radio._podcast_resume_states[feed_url] = {
+            "episode_id": "episode-1",
+            "position": 754,
+            "title": "Episode One",
+        }
+
+        episode = {
+            "episode_id": "episode-1",
+            "title": "Episode One",
+            "audio_url": "https://example.com/fresh-url.mp3",
+        }
+
+        calls = []
+
+        def fake_mpc(*args):
+            calls.append(args)
+            return ""
+
+        with (
+            patch(
+                "radio.resolve_latest_podcast_episode",
+                return_value=episode,
+            ),
+            patch(
+                "radio.mpc",
+                side_effect=fake_mpc,
+            ),
+            patch(
+                "radio.play_stream",
+            ) as play_stream,
+            patch(
+                "radio._wait_for_playing",
+                return_value=True,
+            ),
+            patch(
+                "radio.save_state",
+            ),
+        ):
+            result = radio.play_podcast(
+                feed_url,
+                40,
+            )
+
+        self.assertTrue(result)
+
+        play_stream.assert_called_once_with(
+            "https://example.com/fresh-url.mp3"
+        )
+
+        self.assertIn(
+            ("seek", "754"),
+            calls,
+        )
+
+        self.assertEqual(
+            radio._podcast_resume_states[feed_url],
+            {
+                "episode_id": "episode-1",
+                "position": 0,
+                "title": "Episode One",
+            },
+        )
+
+    def test_newer_episode_discards_old_resume_position(self):
+        feed_url = "https://example.com/feed.xml"
+
+        radio._podcast_resume_states[feed_url] = {
+            "episode_id": "old-episode",
+            "position": 900,
+            "title": "Old Episode",
+        }
+
+        episode = {
+            "episode_id": "new-episode",
+            "title": "New Episode",
+            "audio_url": "https://example.com/new.mp3",
+        }
+
+        calls = []
+
+        def fake_mpc(*args):
+            calls.append(args)
+            return ""
+
+        with (
+            patch(
+                "radio.resolve_latest_podcast_episode",
+                return_value=episode,
+            ),
+            patch(
+                "radio.mpc",
+                side_effect=fake_mpc,
+            ),
+            patch(
+                "radio.play_stream",
+            ),
+            patch(
+                "radio._wait_for_playing",
+                return_value=True,
+            ),
+            patch(
+                "radio.save_state",
+            ),
+        ):
+            result = radio.play_podcast(
+                feed_url,
+                30,
+            )
+
+        self.assertTrue(result)
+
+        self.assertNotIn(
+            ("seek", "900"),
+            calls,
+        )
+
+        self.assertEqual(
+            radio._podcast_resume_states[feed_url],
+            {
+                "episode_id": "new-episode",
+                "position": 0,
+                "title": "New Episode",
+            },
+        )
+
+    def test_pause_active_podcast_saves_position(self):
+        feed_url = "https://example.com/feed.xml"
+
+        radio._active_podcast = {
+            "feed_url": feed_url,
+            "episode_id": "episode-1",
+            "title": "Episode One",
+            "audio_url": "https://example.com/episode.mp3",
+        }
+
+        radio._podcast_resume_states[
+            "https://example.com/other.xml"
+        ] = {
+            "episode_id": "other-episode",
+            "position": 222,
+            "title": "Other Episode",
+        }
+
+        calls = []
+
+        def fake_mpc(*args):
+            calls.append(args)
+
+            if args == ("status",):
+                return (
+                    "Episode One\n"
+                    "[playing] #1/1   "
+                    "12:34/25:00 (50%)\n"
+                    "volume: 35%"
+                )
+
+            return ""
+
+        with (
+            patch(
+                "radio.mpc",
+                side_effect=fake_mpc,
+            ),
+            patch(
+                "radio.save_state",
+            ) as save_state,
+        ):
+            result = radio.pause_active_podcast(35)
+
+        self.assertTrue(result)
+
+        self.assertEqual(
+            radio._podcast_resume_states[feed_url],
+            {
+                "episode_id": "episode-1",
+                "position": 754,
+                "title": "Episode One",
+            },
+        )
+
+        # A second podcast's saved state must survive untouched.
+        self.assertEqual(
+            radio._podcast_resume_states[
+                "https://example.com/other.xml"
+            ]["position"],
+            222,
+        )
+
+        self.assertIn(
+            ("stop",),
+            calls,
+        )
+
+        self.assertIsNone(
+            radio._active_podcast
+        )
+
+        save_state.assert_called_once_with(35)
+
+    def test_natural_end_does_not_create_resume_position(self):
+        feed_url = "https://example.com/feed.xml"
+
+        radio._active_podcast = {
+            "feed_url": feed_url,
+            "episode_id": "episode-1",
+            "title": "Episode One",
+            "audio_url": "https://example.com/episode.mp3",
+        }
+
+        radio._podcast_resume_states[feed_url] = {
+            "episode_id": "episode-1",
+            "position": 0,
+            "title": "Episode One",
+        }
+
+        def fake_mpc(*args):
+            if args == ("status",):
+                return "volume: 35%"
+
+            return ""
+
+        with (
+            patch(
+                "radio.mpc",
+                side_effect=fake_mpc,
+            ),
+            patch(
+                "radio.save_state",
+            ) as save_state,
+        ):
+            result = radio.pause_active_podcast(35)
+
+        self.assertTrue(result)
+
+        self.assertEqual(
+            radio._podcast_resume_states[feed_url][
+                "position"
+            ],
+            0,
+        )
+
+        save_state.assert_not_called()
+
+        self.assertIsNone(
+            radio._active_podcast
+        )
+
+    def test_pause_when_no_podcast_is_active_does_nothing(self):
+        radio._active_podcast = None
+
+        with (
+            patch(
+                "radio.mpc",
+            ) as mpc,
+            patch(
+                "radio.save_state",
+            ) as save_state,
+        ):
+            result = radio.pause_active_podcast(25)
+
+        self.assertFalse(result)
+        mpc.assert_not_called()
+        save_state.assert_not_called()
 
     def test_failed_resolution_leaves_radio_stopped(self):
         calls = []
@@ -516,13 +846,22 @@ class PodcastPlaybackTests(unittest.TestCase):
             ) as play_stream,
         ):
             result = radio.play_podcast(
-                "https://example.com/feed.xml"
+                "https://example.com/feed.xml",
+                25,
             )
 
         self.assertFalse(result)
-        self.assertEqual(calls, [("stop",)])
+
+        self.assertEqual(
+            calls,
+            [("stop",)],
+        )
+
         play_stream.assert_not_called()
 
+        self.assertIsNone(
+            radio._active_podcast
+        )
 
 class StationSyncPodcastValidationTests(unittest.TestCase):
 

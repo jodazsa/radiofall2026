@@ -335,6 +335,127 @@ class PodcastResolverTests(unittest.TestCase):
 
         self.assertIsNone(result)
 
+class PodcastStateValidationTests(unittest.TestCase):
+
+    def test_old_state_without_podcasts_is_backward_compatible(self):
+        result = radio._validate_state(
+            {
+                "volume": 25,
+                "timestamp": 123456,
+            }
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["volume"], 25)
+        self.assertEqual(result["podcasts"], {})
+
+    def test_multiple_podcast_resume_states_are_preserved(self):
+        result = radio._validate_state(
+            {
+                "volume": 40,
+                "podcasts": {
+                    "https://example.com/feed-a.xml": {
+                        "episode_id": "episode-a",
+                        "position": 321,
+                        "title": "Episode A",
+                    },
+                    "https://example.com/feed-b.xml": {
+                        "episode_id": "episode-b",
+                        "position": 654,
+                        "title": "Episode B",
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["podcasts"],
+            {
+                "https://example.com/feed-a.xml": {
+                    "episode_id": "episode-a",
+                    "position": 321,
+                    "title": "Episode A",
+                },
+                "https://example.com/feed-b.xml": {
+                    "episode_id": "episode-b",
+                    "position": 654,
+                    "title": "Episode B",
+                },
+            },
+        )
+
+    def test_invalid_podcast_entry_is_ignored(self):
+        result = radio._validate_state(
+            {
+                "volume": 25,
+                "podcasts": {
+                    "https://example.com/good.xml": {
+                        "episode_id": "good-episode",
+                        "position": 120,
+                        "title": "Good Episode",
+                    },
+                    "https://example.com/bad.xml": {
+                        "episode_id": "",
+                        "position": -10,
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(
+            result["podcasts"],
+            {
+                "https://example.com/good.xml": {
+                    "episode_id": "good-episode",
+                    "position": 120,
+                    "title": "Good Episode",
+                }
+            },
+        )
+
+    def test_save_state_includes_all_podcast_resume_states(self):
+        original = radio._podcast_resume_states
+
+        radio._podcast_resume_states = {
+            "https://example.com/feed.xml": {
+                "episode_id": "episode-123",
+                "position": 456,
+                "title": "Test Episode",
+            }
+        }
+
+        try:
+            with patch(
+                "radio._atomic_write_json"
+            ) as atomic_write:
+                radio.save_state(35)
+
+            self.assertEqual(
+                atomic_write.call_count,
+                2,
+            )
+
+            payload = atomic_write.call_args_list[0].args[1]
+
+            self.assertEqual(
+                payload["volume"],
+                35,
+            )
+
+            self.assertEqual(
+                payload["podcasts"],
+                {
+                    "https://example.com/feed.xml": {
+                        "episode_id": "episode-123",
+                        "position": 456,
+                        "title": "Test Episode",
+                    }
+                },
+            )
+
+        finally:
+            radio._podcast_resume_states = original
+            
 
 class PodcastPlaybackTests(unittest.TestCase):
 

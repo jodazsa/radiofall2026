@@ -1448,6 +1448,10 @@ def main():
 
             if bank_change is not None:
                 old_bank, new_bank = bank_change
+
+                if play_enabled:
+                        pause_active_podcast(volume)
+                    
                 cur_bank_pos = new_bank
                 log.info("Bank selector: %d -> %d", old_bank, new_bank)
 
@@ -1475,6 +1479,10 @@ def main():
 
             if station_change is not None:
                 old_station, new_station = station_change
+
+                if play_enabled:
+                    pause_active_podcast(volume)
+                
                 cur_station_pos = new_station
                 log.info("Station selector: %d -> %d", old_station, new_station)
 
@@ -1507,7 +1515,8 @@ def main():
                 if play_enabled:
                     log.info("Play/stop switch -> PLAY")
 
-                    # Always start the currently selected source fresh.
+                    # Start the selected source. Podcasts resume only when the
+                    # saved episode is still the latest episode in the feed.
                     station = select_station(
                         banks,
                         cur_bank_pos,
@@ -1527,7 +1536,10 @@ def main():
 
                 else:
                     log.info("Play/stop switch -> STOP")
-                    mpc("stop")
+                    
+                    if not pause_active_podcast(volume):
+                            mpc("stop")
+                        
                     playing_bank = None
                     playing_station = None
                     watchdog_stop_since = 0.0
@@ -1545,6 +1557,8 @@ def main():
 
                 if shutdown_requested:
                     log.warning("Rear switch -> POWER-LOSS STANDBY")
+
+                    pause_active_podcast(volume)
 
                     if not wait_for_power_safe_release(display, volume, boot_wait=False):
                         break
@@ -1679,6 +1693,7 @@ def main():
 
     # Application shutdown (SIGTERM/SIGINT).  Rear-switch standby does not exit.
     log.info("Shutting down radio process gracefully")
+    pause_active_podcast(volume)
     save_state(volume)
 
     if display:

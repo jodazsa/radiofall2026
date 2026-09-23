@@ -300,7 +300,7 @@ def load_state():
             validated = _validate_state(data)
             if validated:
                 log.info(
-                    "Restored state from %s: volume=%d",
+                    "Restored state from %s: volume=%d podcasts=%d",
                     path.name,
                     validated["volume"],
                     len(validated["podcasts"]),
@@ -1450,7 +1450,7 @@ def main():
                 old_bank, new_bank = bank_change
 
                 if play_enabled:
-                        pause_active_podcast(volume)
+                    pause_active_podcast(volume)
                     
                 cur_bank_pos = new_bank
                 log.info("Bank selector: %d -> %d", old_bank, new_bank)
@@ -1538,7 +1538,7 @@ def main():
                     log.info("Play/stop switch -> STOP")
                     
                     if not pause_active_podcast(volume):
-                            mpc("stop")
+                        mpc("stop")
                         
                     playing_bank = None
                     playing_station = None
@@ -1674,7 +1674,7 @@ def main():
                 last_display_update = now
                 display_dirty = False
 
-            # Persist only software volume.
+            # Persist software volume and podcast resume state.
             if state_dirty and now - last_state_save >= STATE_SAVE_INTERVAL:
                 save_state(volume)
                 last_state_save = now

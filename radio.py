@@ -128,6 +128,7 @@ log = logging.getLogger("radio")
 
 _shutdown = False
 _podcast_resume_states = {}
+_active_podcast = None
 
 def _handle_signal(signum, frame):
     """Handle SIGTERM/SIGINT for graceful application shutdown."""
@@ -721,7 +722,70 @@ def wait_for_power_safe_release(display, volume, boot_wait=False):
 # Playback
 # -----------------------------------------------------------------------------
 
+def _mpd_elapsed_seconds():
+    """Return current MPD playback position in seconds, or None."""
+    status = mpc("status")
 
+    if "[playing]" not in status and "[paused]" not in status:
+        return None
+
+    for line in status.splitlines():
+        if "[playing]" not in line and "[paused]" not in line:
+            continue
+
+        for token in line.split():
+            if "/" not in token or ":" not in token:
+                continue
+
+            elapsed_text = token.split("/", 1)[0]
+
+            try:
+                parts = [int(part) for part in elapsed_text.split(":")]
+            except ValueError:
+                continue
+
+            if len(parts) == 2:
+                return parts[0] * 60 + parts[1]
+
+            if len(parts) == 3:
+                return (
+                    parts[0] * 3600
+                    + parts[1] * 60
+                    + parts[2]
+                )
+
+    return None
+
+def pause_active_podcast(volume):
+    """Save the current podcast position and stop playback."""
+    global _active_podcast
+
+    if _active_podcast is None:
+        return False
+
+    position = _mpd_elapsed_seconds()
+
+    if position is not None:
+        feed_url = _active_podcast["feed_url"]
+
+        _podcast_resume_states[feed_url] = {
+            "episode_id": _active_podcast["episode_id"],
+            "position": position,
+            "title": _active_podcast["title"],
+        }
+
+        save_state(volume)
+
+        log.info(
+            "Saved podcast position: %s at %d seconds",
+            _active_podcast["title"],
+            position,
+        )
+
+    mpc("stop")
+    _active_podcast = None
+    return True
+    
 def resolve_latest_podcast_episode(feed_url):
     """Return metadata for the first playable podcast episode, or None."""
     log.info("Fetching podcast feed: %s", feed_url)
@@ -843,14 +907,41 @@ def play_stream(url):
     mpc("play")
 
 
-def play_podcast(feed_url):
-    """Resolve and play the newest podcast episode from the beginning."""
+def play_podcast(feed_url, volume):
+    """Play the latest episode, resuming only if it is still current."""
+    global _active_podcast
+
     mpc("stop")
+    _active_podcast = None
 
-    audio_url = resolve_latest_podcast_episode(feed_url)
+    episode = resolve_latest_podcast_episode(feed_url)
 
-    if not audio_url:
+    if not episode:
         return False
+
+    episode_id = episode["episode_id"]
+    title = episode["title"]
+    audio_url = episode["audio_url"]
+
+    saved = _podcast_resume_states.get(feed_url)
+    resume_position = 0
+
+    if saved is not None:
+        if saved["episode_id"] == episode_id:
+            resume_position = saved["position"]
+
+            if resume_position > 0:
+                log.info(
+                    "Resuming podcast: %s at %d seconds",
+                    title,
+                    resume_position,
+                )
+        else:
+            log.info(
+                "New podcast episode available; "
+                "discarding saved position for %s",
+                title,
+            )
 
     log.info("Starting podcast audio")
     play_stream(audio_url)
@@ -859,6 +950,27 @@ def play_podcast(feed_url):
         log.error("Podcast audio did not begin playing")
         mpc("stop")
         return False
+
+    if resume_position > 0:
+        mpc("seek", str(resume_position))
+
+    _active_podcast = {
+        "feed_url": feed_url,
+        "episode_id": episode_id,
+        "title": title,
+        "audio_url": audio_url,
+    }
+
+    # While an episode is actively playing, keep its persisted resume
+    # position at zero. A real position is stored only when playback is
+    # explicitly interrupted.
+    _podcast_resume_states[feed_url] = {
+        "episode_id": episode_id,
+        "position": 0,
+        "title": title,
+    }
+
+    save_state(volume)
 
     return True
 
@@ -1020,7 +1132,7 @@ def play_dir(path_str):
         _seek_random()
 
 
-def play_station(station):
+def play_station(station, volume):
     """Play one resolved station dictionary. Return True when accepted."""
     if not isinstance(station, dict):
         return False
@@ -1044,7 +1156,7 @@ def play_station(station):
             log.error("Podcast station '%s' has no url", name)
             return False
 
-        return play_podcast(url)
+        return play_podcast(url, volume)
     
     if stype == "file":
         path = station.get("path", "").strip()
@@ -1074,7 +1186,7 @@ def play_station(station):
     return False
 
 
-def select_station(banks, bank_id, station_id, play_enabled):
+def select_station(banks, bank_id, station_id, play_enabled, volume):
     """Resolve an absolute selection and optionally start playback."""
     _bank, station = get_station(banks, bank_id, station_id)
     log.info("Selection: %s", describe_selection(banks, bank_id, station_id))
@@ -1084,7 +1196,7 @@ def select_station(banks, bank_id, station_id, play_enabled):
             mpc("stop")
         return None
 
-    if play_enabled and not play_station(station):
+    if play_enabled and not play_station(station, volume):
         return None
 
     return station
@@ -1231,7 +1343,7 @@ def main():
     mpc("volume", str(volume))
 
     if play_enabled:
-        station = select_station(banks, cur_bank_pos, cur_station_pos, True)
+        station = select_station(banks, cur_bank_pos, cur_station_pos, True, volume)
         if station is not None:
             playing_bank = cur_bank_pos
             playing_station = cur_station_pos
@@ -1345,6 +1457,7 @@ def main():
                         cur_bank_pos,
                         cur_station_pos,
                         True,
+                        volume,
                     )
                     if station is not None:
                         playing_bank = cur_bank_pos
@@ -1371,6 +1484,7 @@ def main():
                         cur_bank_pos,
                         cur_station_pos,
                         True,
+                        volume,
                     )
                     if station is not None:
                         playing_bank = cur_bank_pos
@@ -1399,6 +1513,7 @@ def main():
                         cur_bank_pos,
                         cur_station_pos,
                         True,
+                        volume,
                     )
 
                     if station is not None:
@@ -1463,6 +1578,7 @@ def main():
                             cur_bank_pos,
                             cur_station_pos,
                             True,
+                            volume,
                         )
                         if station is not None:
                             playing_bank = cur_bank_pos
@@ -1524,7 +1640,7 @@ def main():
                                     playing_bank,
                                     playing_station,
                                 )
-                                play_station(stn)
+                                play_station(stn, volume)
                                 watchdog_stop_since = 0.0
                         else:
                             watchdog_stop_since = 0.0

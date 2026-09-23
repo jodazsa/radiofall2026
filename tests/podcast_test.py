@@ -61,6 +61,7 @@ class PodcastResolverTests(unittest.TestCase):
             """
             <item>
               <title>First In Feed</title>
+              <guid>episode-first</guid>
               <pubDate>Mon, 01 Sep 2026 10:00:00 GMT</pubDate>
               <enclosure
                   url="https://example.com/first.mp3"
@@ -69,6 +70,7 @@ class PodcastResolverTests(unittest.TestCase):
 
             <item>
               <title>Newer Date But Second</title>
+              <guid>episode-second</guid>
               <pubDate>Wed, 03 Sep 2026 10:00:00 GMT</pubDate>
               <enclosure
                   url="https://example.com/second.mp3"
@@ -87,7 +89,11 @@ class PodcastResolverTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "https://example.com/first.mp3",
+            {
+                "episode_id": "episode-first",
+                "title": "First In Feed",
+                "audio_url": "https://example.com/first.mp3",
+            },
         )
 
     def test_unplayable_first_item_is_skipped(self):
@@ -95,6 +101,7 @@ class PodcastResolverTests(unittest.TestCase):
             """
             <item>
               <title>Broken First Item</title>
+              <guid>broken-first</guid>
               <enclosure
                   url="file:///tmp/not-playable.mp3"
                   type="audio/mpeg" />
@@ -102,6 +109,7 @@ class PodcastResolverTests(unittest.TestCase):
 
             <item>
               <title>Playable Second Item</title>
+              <guid>playable-second</guid>
               <enclosure
                   url="https://example.com/playable.mp3"
                   type="audio/mpeg" />
@@ -119,7 +127,11 @@ class PodcastResolverTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "https://example.com/playable.mp3",
+            {
+                "episode_id": "playable-second",
+                "title": "Playable Second Item",
+                "audio_url": "https://example.com/playable.mp3",
+            },
         )
 
     def test_pubdate_is_not_required(self):
@@ -127,6 +139,7 @@ class PodcastResolverTests(unittest.TestCase):
             """
             <item>
               <title>No Date Needed</title>
+              <guid>no-date-episode</guid>
               <enclosure
                   url="https://example.com/current.mp3"
                   type="audio/mpeg" />
@@ -144,7 +157,82 @@ class PodcastResolverTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "https://example.com/current.mp3",
+            {
+                "episode_id": "no-date-episode",
+                "title": "No Date Needed",
+                "audio_url": "https://example.com/current.mp3",
+            },
+        )
+
+    def test_episode_id_falls_back_when_guid_missing(self):
+        data = rss_bytes(
+            """
+            <item>
+              <title>Episode Without GUID</title>
+              <pubDate>Tue, 22 Sep 2026 10:00:00 GMT</pubDate>
+              <enclosure
+                  url="https://example.com/fallback.mp3"
+                  type="audio/mpeg" />
+            </item>
+            """
+        )
+
+        with patch(
+            "radio.urllib.request.urlopen",
+            return_value=FakeResponse(data),
+        ):
+            result = radio.resolve_latest_podcast_episode(
+                "https://example.com/feed.xml"
+            )
+
+        self.assertEqual(
+            result["episode_id"],
+            "Episode Without GUID|Tue, 22 Sep 2026 10:00:00 GMT",
+        )
+
+        self.assertEqual(
+            result["title"],
+            "Episode Without GUID",
+        )
+
+        self.assertEqual(
+            result["audio_url"],
+            "https://example.com/fallback.mp3",
+        )
+
+    def test_episode_id_falls_back_to_audio_url_without_guid_or_date(self):
+        data = rss_bytes(
+            """
+            <item>
+              <title>Minimal Episode</title>
+              <enclosure
+                  url="https://example.com/minimal.mp3"
+                  type="audio/mpeg" />
+            </item>
+            """
+        )
+
+        with patch(
+            "radio.urllib.request.urlopen",
+            return_value=FakeResponse(data),
+        ):
+            result = radio.resolve_latest_podcast_episode(
+                "https://example.com/feed.xml"
+            )
+
+        self.assertEqual(
+            result["episode_id"],
+            "https://example.com/minimal.mp3",
+        )
+
+        self.assertEqual(
+            result["title"],
+            "Minimal Episode",
+        )
+
+        self.assertEqual(
+            result["audio_url"],
+            "https://example.com/minimal.mp3",
         )
 
     def test_resolver_stops_reading_after_first_playable_item(self):
@@ -154,6 +242,7 @@ class PodcastResolverTests(unittest.TestCase):
             f"""
             <item>
               <title>First Episode</title>
+              <guid>first-episode</guid>
               <enclosure
                   url="https://example.com/first.mp3"
                   type="audio/mpeg" />
@@ -161,6 +250,7 @@ class PodcastResolverTests(unittest.TestCase):
 
             <item>
               <title>Large Historical Item</title>
+              <guid>old-episode</guid>
               <description>{filler}</description>
               <enclosure
                   url="https://example.com/old.mp3"
@@ -181,7 +271,11 @@ class PodcastResolverTests(unittest.TestCase):
 
         self.assertEqual(
             result,
-            "https://example.com/first.mp3",
+            {
+                "episode_id": "first-episode",
+                "title": "First Episode",
+                "audio_url": "https://example.com/first.mp3",
+            },
         )
 
         self.assertLess(
@@ -199,6 +293,7 @@ class PodcastResolverTests(unittest.TestCase):
             """
             <item>
               <title>Bad URL</title>
+              <guid>bad-url</guid>
               <enclosure
                   url="file:///tmp/not-a-podcast.mp3"
                   type="audio/mpeg" />

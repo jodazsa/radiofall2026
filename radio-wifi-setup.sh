@@ -56,9 +56,19 @@ while (( SECONDS < deadline )); do
 done
 
 log "No Wi-Fi connection found"
-log "Starting setup portal: $PORTAL_SSID"
 
 nmcli radio wifi on
+sleep 1
+
+log "Refreshing nearby Wi-Fi networks..."
+
+nmcli device wifi rescan ifname "$INTERFACE" || true
+sleep 3
+
+log "Nearby Wi-Fi networks:"
+nmcli -t -f SSID,SIGNAL device wifi list ifname "$INTERFACE" --rescan no || true
+
+log "Starting setup portal: $PORTAL_SSID"
 
 exec "$WIFI_CONNECT" \
     --portal-interface "$INTERFACE" \

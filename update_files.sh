@@ -73,8 +73,27 @@ sudo install \
     "$SCRIPT_DIR/radio-stations-sync.timer" \
     /etc/systemd/system/radio-stations-sync.timer
 
+
+echo
+echo "Installing Wi-Fi setup fallback..."
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0755 \
+    "$SCRIPT_DIR/radio-wifi-setup.sh" \
+    /usr/local/bin/radio-wifi-setup.sh
+
+sudo install \
+    -o root \
+    -g root \
+    -m 0644 \
+    "$SCRIPT_DIR/radio-wifi-setup.service" \
+    /etc/systemd/system/radio-wifi-setup.service
+
 sudo systemctl daemon-reload
 sudo systemctl enable radio-stations-sync.timer
+sudo systemctl enable radio-wifi-setup.service
 
 echo
 echo "Restarting radio..."

@@ -1,0 +1,17 @@
+[Unit]
+Description=Radio Wi-Fi Setup Fallback
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/radio-wifi-setup.sh
+Restart=on-failure
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=radio-wifi-setup
+
+[Install]
+WantedBy=multi-user.target
